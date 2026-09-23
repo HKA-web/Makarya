@@ -1,0 +1,118 @@
+# ==============================================================================
+# Makarya IDE - Comprehensive Git Ignore
+# Electron + Vite + Vue 3 + TypeScript + Tailwind CSS / Nuxt UI
+# ==============================================================================
+
+# --- Node & Dependencies ---
+node_modules/
+.pnp
+.pnp.js
+package-lock.json.backup
+
+# --- Build Outputs & Bundles ---
+dist/
+dist-ssr/
+out/
+build/
+release/
+bin/
+
+# --- Electron Builder Packaging Output ---
+*.exe
+*.dmg
+*.deb
+*.rpm
+*.snap
+*.AppImage
+*.apk
+*.zip
+*.tar.gz
+*.blockmap
+builder-effective-config.yaml
+builder-debug.yml
+
+# --- Cache & Temp Directories ---
+.cache/
+.vite/
+.eslintcache
+.stylelintcache
+*.tsbuildinfo
+.temp/
+.tmp/
+tmp/
+temp/
+
+# --- Local Databases & Storage ---
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# --- Environment & Secret Configuration ---
+.env
+.env.*
+!.env.example
+*.local
+
+# --- Logs ---
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# --- Operating System Files ---
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+
+# --- IDEs & Editors ---
+# JetBrains (WebStorm, PhpStorm, IntelliJ)
+.idea/
+*.iws
+*.iml
+*.ipr
+
+# Visual Studio Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# Vim / Sublime
+*.swp
+*.swo
+*~
+*.sublime-workspace
+*.sublime-project

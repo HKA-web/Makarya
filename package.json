@@ -1,0 +1,49 @@
+{
+  "name": "makarya-workspace",
+  "version": "0.1.0",
+  "description": "IDE-Class ERP Desktop Shell with Monaco Editor & AI Copilot",
+  "main": "./out/main/index.js",
+  "author": "Makarya",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "vue-tsc --noEmit && electron-vite build",
+    "postinstall": "electron-builder install-app-deps",
+    "build:win": "npm run build && electron-builder --win --config",
+    "preview": "electron-vite preview"
+  },
+  "dependencies": {
+    "@electron-toolkit/preload": "^3.0.1",
+    "@electron-toolkit/utils": "^3.0.0",
+    "@nuxt/ui": "^4.11.2",
+    "@primeuix/themes": "^1.0.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "diff": "^9.0.0",
+    "monaco-editor": "^0.52.2",
+    "node-pty": "^1.1.0",
+    "pinia": "^2.3.1",
+    "primeicons": "^7.0.0",
+    "primevue": "^4.3.1",
+    "sql.js": "^1.14.2",
+    "vue": "^3.5.13",
+    "vue-router": "^4.6.4"
+  },
+  "devDependencies": {
+    "@iconify-json/lucide": "^1.2.136",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/diff": "^7.0.2",
+    "@types/node": "^22.13.9",
+    "@types/sql.js": "^1.4.11",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "autoprefixer": "^10.4.21",
+    "electron": "^33.4.4",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^2.3.0",
+    "postcss": "^8.5.3",
+    "tailwindcss": "^4.3.3",
+    "tailwindcss-primeui": "^0.4.0",
+    "typescript": "^5.8.2",
+    "vite": "^5.4.14",
+    "vue-tsc": "^2.2.8"
+  }
+}

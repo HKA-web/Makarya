@@ -1,0 +1,130 @@
+@import "tailwindcss";
+@import "@nuxt/ui";
+
+@theme static {
+  --color-primary-50: #eefcf4;
+  --color-primary-100: #d6f8e4;
+  --color-primary-200: #b0f0cd;
+  --color-primary-300: #7be4af;
+  --color-primary-400: #42b883;
+  --color-primary-500: #42b883;
+  --color-primary-600: #33a06f;
+  --color-primary-700: #2a7e58;
+  --color-primary-800: #256448;
+  --color-primary-900: #20523d;
+  --color-primary-950: #0c2d20;
+
+  --color-neutral-800: #131c2a;
+  --color-neutral-900: #0c111a;
+  --color-neutral-950: #090d14;
+}
+
+:root {
+  /* Vue.js Brand Identity Tokens */
+  --vue-green: #42b883;
+  --vue-green-hover: #33a06f;
+  --vue-green-light: #5cd099;
+  --vue-mint: #34d399;
+  --vue-slate: #35495e;
+  --vue-slate-dark: #1e293b;
+  --vue-obsidian: #090d14;
+  --vue-surface: #0e1626;
+  --vue-surface-card: #131d2e;
+  --vue-border: rgba(255, 255, 255, 0.08);
+  --vue-border-active: rgba(66, 184, 131, 0.6);
+  --vue-glow: 0 0 16px rgba(66, 184, 131, 0.25);
+}
+
+html, body, #app {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Inter', Helvetica, Arial, sans-serif;
+  background-color: #090d14;
+  color: #f1f5f9;
+}
+
+*, ::before, ::after {
+  forced-color-adjust: none;
+}
+
+/* Custom dark scrollbars matching Vue.js IDE aesthetics */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(66, 184, 131, 0.5);
+}
+
+/* Vue.js Gradient Badges & Accents */
+.vue-gradient-text {
+  background: linear-gradient(135deg, #42b883 0%, #34d399 50%, #60a5fa 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.vue-gradient-bg {
+  background: linear-gradient(135deg, #42b883 0%, #2a9464 100%);
+}
+
+.vue-glow-box {
+  box-shadow: 0 0 20px rgba(66, 184, 131, 0.15);
+}
+
+.vue-border-subtle {
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+/* Nuxt UI Chat Shimmer & Reasoning animations */
+@keyframes vue-shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.vue-shimmer-text {
+  background: linear-gradient(90deg, #42b883 0%, #42d392 25%, #60a5fa 50%, #42d392 75%, #42b883 100%);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: vue-shimmer 3s linear infinite;
+}
+
+.vue-pulse-dot {
+  box-shadow: 0 0 10px rgba(66, 184, 131, 0.8), 0 0 20px rgba(66, 184, 131, 0.4);
+  background-color: #42b883;
+}
+
+.vue-glass {
+  background: rgba(14, 22, 38, 0.85);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.vue-glass-card {
+  background: rgba(19, 29, 46, 0.75);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.vue-focus-ring:focus-within {
+  border-color: #42b883 !important;
+  box-shadow: 0 0 0 1px rgba(66, 184, 131, 0.45), 0 0 14px rgba(66, 184, 131, 0.2) !important;
+}
