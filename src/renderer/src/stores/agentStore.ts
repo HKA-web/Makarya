@@ -1,14 +1,25 @@
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { useWorkspaceStore } from './workspaceStore'
+import { useSettingsStore } from './settingsStore'
 
 export interface AgentToolCallItem {
   id: string
   name: string
   args: Record<string, any>
   output?: string
-  status: 'running' | 'success' | 'error'
+  status: 'running' | 'success' | 'error' | 'waiting_approval'
   durationMs?: number
+}
+
+export interface AttachedFileMeta {
+  path: string
+  name: string
+  isDirectory?: boolean
+  lineRange?: string
+  startLine?: number
+  endLine?: number
+  selectedSnippet?: string
 }
 
 export interface ChatMessage {
@@ -29,7 +40,7 @@ export interface ChatMessage {
     originalContent?: string
     newContent?: string
   }>
-  attachedFiles?: Array<{ path: string; name: string }>
+  attachedFiles?: AttachedFileMeta[]
   timestamp: string
   isStreaming?: boolean
   error?: string
@@ -86,11 +97,38 @@ export const useAgentStore = defineStore('agentStore', () => {
     }
   }
 
+  const settingsStore = useSettingsStore()
   const isGenerating = ref<boolean>(false)
   const activeRequestId = ref<string | null>(null)
-  const selectedModel = ref<string>(localStorage.getItem('makarya_agent_selected_model') || '')
+
+  // Selected model: follow settingsStore.ai.defaultModel first, then localStorage
+  const savedModel = localStorage.getItem('makarya_agent_selected_model') || ''
+  const selectedModel = ref<string>(settingsStore.ai.defaultModel || savedModel || '')
   const availableModels = ref<string[]>([])
   const isModelsLoading = ref<boolean>(false)
+
+  // Keep selectedModel synchronized with settingsStore.ai.defaultModel
+  watch(
+    () => settingsStore.ai.defaultModel,
+    (newDefault) => {
+      if (newDefault && selectedModel.value !== newDefault) {
+        selectedModel.value = newDefault
+        localStorage.setItem('makarya_agent_selected_model', newDefault)
+      }
+    }
+  )
+
+  watch(
+    selectedModel,
+    (newModel) => {
+      if (newModel) {
+        localStorage.setItem('makarya_agent_selected_model', newModel)
+        if (settingsStore.ai.defaultModel !== newModel) {
+          settingsStore.ai.defaultModel = newModel
+        }
+      }
+    }
+  )
 
   async function loadModels(): Promise<void> {
     if (!window.makaryaAPI?.fetchAvailableModels) return
@@ -99,20 +137,29 @@ export const useAgentStore = defineStore('agentStore', () => {
       const models = await window.makaryaAPI.fetchAvailableModels()
       if (Array.isArray(models) && models.length > 0) {
         availableModels.value = models
+
+        // Prioritas 1: Ambil model default dari Pengaturan
+        const configuredDefault = settingsStore.ai.defaultModel
         const saved = localStorage.getItem('makarya_agent_selected_model')
-        if (saved && models.includes(saved)) {
+
+        if (configuredDefault && models.includes(configuredDefault)) {
+          selectedModel.value = configuredDefault
+        } else if (saved && models.includes(saved)) {
           selectedModel.value = saved
-        } else if (!selectedModel.value || !models.includes(selectedModel.value)) {
+          settingsStore.ai.defaultModel = saved
+        } else if (selectedModel.value && models.includes(selectedModel.value)) {
+          settingsStore.ai.defaultModel = selectedModel.value
+        } else {
+          // Fallback ke model pertama yang tersedia dari 9router
           selectedModel.value = models[0]
+          settingsStore.ai.defaultModel = models[0]
         }
       } else {
         availableModels.value = []
-        selectedModel.value = ''
       }
     } catch (err) {
       console.warn('Gagal memuat model dari 9router:', err)
       availableModels.value = []
-      selectedModel.value = ''
     } finally {
       isModelsLoading.value = false
     }
@@ -122,6 +169,7 @@ export const useAgentStore = defineStore('agentStore', () => {
     selectedModel.value = model
     if (model) {
       localStorage.setItem('makarya_agent_selected_model', model)
+      settingsStore.ai.defaultModel = model
     }
   }
 
@@ -132,6 +180,7 @@ export const useAgentStore = defineStore('agentStore', () => {
   let cleanupTokenListener: (() => void) | null = null
   let cleanupThoughtListener: (() => void) | null = null
   let cleanupToolStartListener: (() => void) | null = null
+  let cleanupToolRequireApprovalListener: (() => void) | null = null
   let cleanupToolFinishListener: (() => void) | null = null
   let cleanupFileModifiedListener: (() => void) | null = null
   let cleanupDoneListener: (() => void) | null = null
@@ -353,6 +402,27 @@ export const useAgentStore = defineStore('agentStore', () => {
       }
     })
 
+    // 3b. Tool Require Approval (Ask Before Execution)
+    cleanupToolRequireApprovalListener = window.makaryaAPI.onAgentToolRequireApproval?.((data) => {
+      const targetMessage = messages.value.find((msg) => msg.id === data.requestId)
+      if (targetMessage) {
+        targetMessage.activeAction = `Menunggu izin eksekusi: ${data.toolName}...`
+        if (!targetMessage.toolCalls) targetMessage.toolCalls = []
+        const existingTool = targetMessage.toolCalls.find((tc) => tc.id === data.toolCallId)
+        if (existingTool) {
+          existingTool.status = 'waiting_approval'
+          existingTool.args = data.args
+        } else {
+          targetMessage.toolCalls.push({
+            id: data.toolCallId,
+            name: data.toolName,
+            args: data.args,
+            status: 'waiting_approval'
+          })
+        }
+      }
+    })
+
     // 4. Tool Execution Finished
     cleanupToolFinishListener = window.makaryaAPI.onAgentToolFinish?.((data) => {
       if (data.requestId !== activeRequestId.value) return
@@ -429,11 +499,21 @@ export const useAgentStore = defineStore('agentStore', () => {
         }
       }
 
-      // Register pending diff in workspaceStore and auto-focus the file tab
+      // Register pending diff in workspaceStore and auto-focus the file tab based on Review Policy
       const workspaceStore = useWorkspaceStore()
+      const settingsStore = useSettingsStore()
       if (data.originalContent !== undefined && data.newContent !== undefined) {
-        workspaceStore.setPendingDiff(data.filePath, data.originalContent, data.newContent)
-        workspaceStore.openFile(data.filePath, data.fileName)
+        if (settingsStore.ai.reviewPolicy === 'auto_apply') {
+          // Auto apply policy: save directly to disk and update active editor without diff review
+          if (window.makaryaAPI?.writeFile) {
+            window.makaryaAPI.writeFile(data.filePath, data.newContent)
+          }
+          workspaceStore.clearPendingDiff(data.filePath)
+          workspaceStore.openFile(data.filePath, data.fileName)
+        } else {
+          workspaceStore.setPendingDiff(data.filePath, data.originalContent, data.newContent)
+          workspaceStore.openFile(data.filePath, data.fileName)
+        }
       }
     })
 
@@ -487,17 +567,7 @@ export const useAgentStore = defineStore('agentStore', () => {
     })
   }
 
-  async function loadModels(): Promise<void> {
-    if (!window.makaryaAPI?.fetchAvailableModels) return
-    try {
-      const models = await window.makaryaAPI.fetchAvailableModels()
-      if (models && models.length > 0) {
-        availableModels.value = models
-      }
-    } catch (modelError) {
-      console.warn('Could not load models from 9router:', modelError)
-    }
-  }
+
 
   async function acceptFileChanges(filePath: string): Promise<void> {
     const workspaceStore = useWorkspaceStore()
@@ -555,7 +625,16 @@ export const useAgentStore = defineStore('agentStore', () => {
     activeFileContext?: ActiveFileContext,
     projectRoot?: string,
     images?: string[],
-    attachedFileContexts?: Array<{ filePath: string; fileName: string; content?: string; language?: string }>
+    attachedFileContexts?: Array<{
+      filePath: string
+      fileName: string
+      content?: string
+      language?: string
+      lineRange?: string
+      startLine?: number
+      endLine?: number
+      selectedSnippet?: string
+    }>
   ): Promise<void> {
     const cleanPrompt = promptText.trim()
     const hasImages = Array.isArray(images) && images.length > 0
@@ -568,9 +647,13 @@ export const useAgentStore = defineStore('agentStore', () => {
       return
     }
 
-    if (!selectedModel.value) {
+    const effectiveModel = selectedModel.value || settingsStore.ai.defaultModel
+    if (!effectiveModel) {
       alert('Tidak ada model AI yang dipilih atau tersedia. Pastikan 9router aktif dan terdeteksi.')
       return
+    }
+    if (!selectedModel.value) {
+      selectedModel.value = effectiveModel
     }
 
     if (!window.makaryaAPI?.sendChatMessage) {
@@ -584,7 +667,16 @@ export const useAgentStore = defineStore('agentStore', () => {
       role: 'user',
       content: cleanPrompt,
       images: hasImages ? [...images] : undefined,
-      attachedFiles: hasFiles ? attachedFileContexts.map((f) => ({ path: f.filePath, name: f.fileName })) : undefined,
+      attachedFiles: hasFiles
+        ? attachedFileContexts.map((f) => ({
+            path: f.filePath,
+            name: f.fileName,
+            lineRange: f.lineRange,
+            startLine: f.startLine,
+            endLine: f.endLine,
+            selectedSnippet: f.selectedSnippet
+          }))
+        : undefined,
       timestamp: 'Sekarang'
     }
     messages.value.push(userMessage)
@@ -644,10 +736,21 @@ export const useAgentStore = defineStore('agentStore', () => {
       })
     }
 
-    // Inject user attached files from drag-and-drop
+    // Inject user attached files or tagged code snippets (from Ctrl+L or Drag & Drop)
     if (attachedFileContexts && attachedFileContexts.length > 0) {
       for (const af of attachedFileContexts) {
-        if (af.content) {
+        if (af.lineRange && af.selectedSnippet) {
+          payloadMessages.push({
+            role: 'system',
+            content:
+              `[Potongan Kode Dilampirkan Pengguna (Ctrl+L)]:\n` +
+              `- Berkas: ${af.fileName} (${af.lineRange})\n` +
+              `- Path: ${af.filePath}\n` +
+              `- Bahasa: ${af.language || 'plaintext'}\n` +
+              `- Baris: ${af.lineRange}\n` +
+              `- Kode Terpilih:\n\`\`\`${af.language || ''}\n${af.selectedSnippet}\n\`\`\``
+          })
+        } else if (af.content) {
           payloadMessages.push({
             role: 'system',
             content:
@@ -701,11 +804,13 @@ export const useAgentStore = defineStore('agentStore', () => {
     }
 
     try {
+      const settingsStore = useSettingsStore()
       await window.makaryaAPI.sendChatMessage({
         requestId: assistantRequestId,
         model: selectedModel.value,
         messages: payloadMessages,
-        projectRoot: effectiveRoot
+        projectRoot: effectiveRoot,
+        autoExecution: settingsStore.ai.autoExecution
       })
     } catch (sendError: any) {
       console.error('Error invoking sendChatMessage:', sendError)
@@ -762,6 +867,24 @@ export const useAgentStore = defineStore('agentStore', () => {
     createNewSession()
   }
 
+  async function approveToolCall(toolCallId: string, approved: boolean): Promise<void> {
+    if (window.makaryaAPI?.respondToolApproval) {
+      await window.makaryaAPI.respondToolApproval(toolCallId, approved)
+      // Update tool status locally
+      for (const msg of messages.value) {
+        if (msg.toolCalls) {
+          const tool = msg.toolCalls.find((t) => t.id === toolCallId)
+          if (tool && tool.status === 'waiting_approval') {
+            tool.status = approved ? 'running' : 'error'
+            if (!approved) {
+              tool.output = 'Eksekusi dibatalkan oleh pengguna (Ditolak).'
+            }
+          }
+        }
+      }
+    }
+  }
+
   return {
     messages,
     currentSessionId,
@@ -789,6 +912,7 @@ export const useAgentStore = defineStore('agentStore', () => {
     rejectAllChanges,
     acceptFileChanges,
     rejectFileChanges,
-    removeModifiedFile
+    removeModifiedFile,
+    approveToolCall
   }
 })

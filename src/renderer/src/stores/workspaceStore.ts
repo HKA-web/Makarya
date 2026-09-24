@@ -920,8 +920,40 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     }
   }
 
+  function updateMru(id: string): void {
+    if (!id) return
+    mruTabIds.value = [id, ...mruTabIds.value.filter((i) => i !== id)]
+  }
+
   function setActiveTab(targetTabId: string): void {
     activeTabId.value = targetTabId
+    updateMru(targetTabId)
+  }
+
+  const tabsInMruOrder = computed(() => {
+    const list = [...tabList.value]
+    return list.sort((a, b) => {
+      const idxA = mruTabIds.value.indexOf(a.id)
+      const idxB = mruTabIds.value.indexOf(b.id)
+      const posA = idxA === -1 ? 9999 : idxA
+      const posB = idxB === -1 ? 9999 : idxB
+      return posA - posB
+    })
+  })
+
+  function toggleTabSwitcher(visible?: boolean): void {
+    if (typeof visible === 'boolean') {
+      isTabSwitcherVisible.value = visible
+    } else {
+      isTabSwitcherVisible.value = !isTabSwitcherVisible.value
+    }
+  }
+
+  function cycleTab(direction: 1 | -1 = 1): void {
+    if (tabList.value.length <= 1) return
+    const currentIndex = tabList.value.findIndex((tab) => tab.id === activeTabId.value)
+    const nextIndex = (currentIndex + direction + tabList.value.length) % tabList.value.length
+    setActiveTab(tabList.value[nextIndex].id)
   }
 
   function saveActiveTabViewState(viewState: TabEditorViewState, targetTabId?: string): void {
@@ -957,6 +989,17 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     isSidebarOpen.value = !isSidebarOpen.value
   }
 
+  // Active Monaco Editor instance tracking for global shortcuts (e.g. Ctrl+L)
+  let activeMonacoEditorInstance: any = null
+
+  function setActiveEditorInstance(editor: any): void {
+    activeMonacoEditorInstance = editor
+  }
+
+  function getActiveEditorInstance(): any {
+    return activeMonacoEditorInstance
+  }
+
   return {
     workspaceRoots,
     activeRootPath,
@@ -975,6 +1018,11 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     isCommandPaletteVisible,
     isQuickOpenVisible,
     isWindowSwitcherVisible,
+    isTabSwitcherVisible,
+    mruTabIds,
+    tabsInMruOrder,
+    toggleTabSwitcher,
+    cycleTab,
     registeredApps,
     activeWindows,
     toggleWindowSwitcher,
@@ -1028,6 +1076,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     acceptDiff,
     rejectDiff,
     acceptHunk,
-    rejectHunk
+    rejectHunk,
+    setActiveEditorInstance,
+    getActiveEditorInstance
   }
 })

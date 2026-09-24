@@ -1,5 +1,5 @@
 import type { BrowserWindow } from 'electron'
-import { AGENT_TOOLS, AgentToolExecutor } from './agentTools'
+import { AGENT_TOOLS, AgentToolExecutor, type ToolExecutionResult } from './agentTools'
 
 export type MultimodalContentPart =
   | { type: 'text'; text: string }
@@ -25,6 +25,7 @@ export interface StreamChatRequest {
   model?: string
   messages: ChatMessagePayload[]
   projectRoot?: string
+  autoExecution?: 'always_proceed' | 'ask_before' | 'never'
 }
 
 export interface AiServiceConfiguration {
@@ -55,6 +56,7 @@ const AGENT_SYSTEM_PROMPT =
 
 export class AiAgentService {
   private activeAbortControllers: Map<string, AbortController> = new Map()
+  private pendingApprovals: Map<string, (approved: boolean) => void> = new Map()
   private configuration: AiServiceConfiguration
 
   constructor(customConfig?: Partial<AiServiceConfiguration>) {
@@ -69,7 +71,23 @@ export class AiAgentService {
     this.configuration = { ...this.configuration, ...newConfig }
   }
 
+  public respondToolApproval(toolCallId: string, approved: boolean): boolean {
+    const resolver = this.pendingApprovals.get(toolCallId)
+    if (resolver) {
+      resolver(approved)
+      this.pendingApprovals.delete(toolCallId)
+      return true
+    }
+    return false
+  }
+
   public abortStream(requestId: string): boolean {
+    // Reject any pending tool approvals for this stream
+    for (const [toolId, resolver] of this.pendingApprovals.entries()) {
+      resolver(false)
+      this.pendingApprovals.delete(toolId)
+    }
+
     const controller = this.activeAbortControllers.get(requestId)
     if (controller) {
       controller.abort()
@@ -113,7 +131,7 @@ export class AiAgentService {
     request: StreamChatRequest,
     targetWindow: BrowserWindow | null
   ): Promise<void> {
-    const { requestId, messages, model, projectRoot } = request
+    const { requestId, messages, model, projectRoot, autoExecution = 'always_proceed' } = request
     if (!this.configuration.baseUrl) {
       if (targetWindow && !targetWindow.isDestroyed()) {
         targetWindow.webContents.send('agent:stream-error', {
@@ -381,12 +399,60 @@ export class AiAgentService {
               })
             }
 
-            // Execute the tool in Node.js
-            const executionResult = await toolExecutor.execute(
-              tc.id,
-              tc.function.name,
-              parsedArgs
-            )
+            const isCommandTool = tc.function.name === 'execute_command'
+            const shouldAskApproval = autoExecution === 'ask_before' && isCommandTool
+            const isBlocked = autoExecution === 'never' && isCommandTool
+
+            let executionResult: ToolExecutionResult
+
+            if (isBlocked) {
+              executionResult = {
+                toolCallId: tc.id,
+                toolName: tc.function.name,
+                status: 'error',
+                output: 'Eksekusi dibatalkan: Auto Execution policy disetel ke "Never Execute".',
+                durationMs: 0
+              }
+            } else if (shouldAskApproval) {
+              // Emit approval request to UI
+              if (targetWindow && !targetWindow.isDestroyed()) {
+                targetWindow.webContents.send('agent:tool-require-approval', {
+                  requestId,
+                  toolCallId: tc.id,
+                  toolName: tc.function.name,
+                  args: parsedArgs
+                })
+              }
+
+              // Wait for user to approve or reject
+              const approved = await new Promise<boolean>((resolve) => {
+                this.pendingApprovals.set(tc.id, resolve)
+              })
+              this.pendingApprovals.delete(tc.id)
+
+              if (!approved) {
+                executionResult = {
+                  toolCallId: tc.id,
+                  toolName: tc.function.name,
+                  status: 'error',
+                  output: 'Eksekusi dibatalkan oleh pengguna (Perintah tidak diizinkan dijalankan).',
+                  durationMs: 0
+                }
+              } else {
+                executionResult = await toolExecutor.execute(
+                  tc.id,
+                  tc.function.name,
+                  parsedArgs
+                )
+              }
+            } else {
+              // Execute directly in Node.js
+              executionResult = await toolExecutor.execute(
+                tc.id,
+                tc.function.name,
+                parsedArgs
+              )
+            }
 
             // Emit tool finish with results to UI
             if (targetWindow && !targetWindow.isDestroyed()) {

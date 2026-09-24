@@ -12,6 +12,9 @@ export interface EditorSettings {
   cursorBlinking: 'blink' | 'smooth' | 'phase' | 'solid'
 }
 
+export type AutoExecutionPolicy = 'always_proceed' | 'ask_before' | 'never'
+export type ReviewPolicy = 'request_review' | 'auto_apply' | 'always_ask'
+
 export interface AISettings {
   baseUrl: string
   apiKey: string
@@ -20,6 +23,8 @@ export interface AISettings {
   autoIncludeActiveFile: boolean
   streamThoughts: boolean
   maxHistoryMessages: number
+  autoExecution: AutoExecutionPolicy
+  reviewPolicy: ReviewPolicy
 }
 
 const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
@@ -40,7 +45,9 @@ const DEFAULT_AI_SETTINGS: AISettings = {
   temperature: 0.4,
   autoIncludeActiveFile: true,
   streamThoughts: true,
-  maxHistoryMessages: 10
+  maxHistoryMessages: 10,
+  autoExecution: 'always_proceed',
+  reviewPolicy: 'request_review'
 }
 
 export const useSettingsStore = defineStore('settingsStore', () => {

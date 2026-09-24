@@ -85,9 +85,12 @@ export interface ElectronAPI {
       name?: string
     }>
     projectRoot?: string
+    autoExecution?: string
   }) => Promise<{ accepted: boolean }>
   abortChatMessage: (requestId: string) => Promise<{ aborted: boolean }>
+  respondToolApproval: (toolCallId: string, approved: boolean) => Promise<boolean>
   fetchAvailableModels: () => Promise<string[]>
+  onAgentToolRequireApproval: (callback: (data: { requestId: string; toolCallId: string; toolName: string; args: any }) => void) => () => void
   onAgentStreamToken: (callback: (data: { requestId: string; deltaContent: string }) => void) => () => void
   onAgentThought: (callback: (data: { requestId: string; deltaThought: string }) => void) => () => void
   onAgentToolStart: (callback: (data: ToolStartEventPayload) => void) => () => void

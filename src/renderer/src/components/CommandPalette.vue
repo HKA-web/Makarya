@@ -121,6 +121,75 @@ const commandList: CommandItem[] = [
     }
   },
   {
+    id: 'cmd-tag-to-agent',
+    title: 'Tag Baris Terpilih ke Chat Agent',
+    category: 'AI Assistant',
+    icon: 'i-lucide-code-xml',
+    shortcut: 'Ctrl+L',
+    action: () => {
+      workspaceStore.isCommandPaletteVisible = false
+      if (!workspaceStore.isCopilotPanelOpen) {
+        workspaceStore.isCopilotPanelOpen = true
+      }
+      const editor = workspaceStore.getActiveEditorInstance()
+      const activeTab = workspaceStore.activeTab
+      if (editor) {
+        const selection = editor.getSelection()
+        const model = editor.getModel()
+        if (model) {
+          let snippet = ''
+          let startLine = 1
+          let endLine = 1
+          let lineRange = ''
+          if (selection && !selection.isEmpty()) {
+            snippet = model.getValueInRange(selection)
+            startLine = selection.startLineNumber
+            endLine = selection.endLineNumber
+            lineRange = startLine === endLine ? `L${startLine}` : `L${startLine}-L${endLine}`
+          } else {
+            const pos = editor.getPosition()
+            if (pos) {
+              startLine = pos.lineNumber
+              endLine = pos.lineNumber
+              snippet = model.getLineContent(pos.lineNumber)
+              lineRange = `L${startLine}`
+            }
+          }
+          const filePath = activeTab?.filePath || ''
+          const fileName = activeTab?.title || (filePath ? filePath.split(/[/\\]/).pop() || 'Untitled' : 'Untitled')
+          const language = activeTab?.language || 'plaintext'
+          window.dispatchEvent(
+            new CustomEvent('makarya:tag-to-agent', {
+              detail: {
+                path: filePath,
+                name: fileName,
+                startLine,
+                endLine,
+                lineRange,
+                selectedSnippet: snippet,
+                language
+              }
+            })
+          )
+          return
+        }
+      }
+      if (activeTab && activeTab.filePath) {
+        window.dispatchEvent(
+          new CustomEvent('makarya:tag-to-agent', {
+            detail: {
+              path: activeTab.filePath,
+              name: activeTab.title,
+              language: activeTab.language
+            }
+          })
+        )
+      } else {
+        window.dispatchEvent(new CustomEvent('makarya:focus-agent-chat'))
+      }
+    }
+  },
+  {
     id: 'cmd-agent-history',
     title: 'Buka Riwayat Obrolan AI...',
     category: 'AI Assistant',

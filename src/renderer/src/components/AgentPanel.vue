@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, watch, nextTick, onMounted, computed } from 'vue'
+import { ref, watch, nextTick, onMounted, onUnmounted, computed } from 'vue'
 import { useToast } from 'primevue/usetoast'
 import { useWorkspaceStore } from '../stores/workspaceStore'
 import { useAgentStore, type AgentToolCallItem } from '../stores/agentStore'
+import { useSettingsStore } from '../stores/settingsStore'
 import { parseMarkdownBlocks, formatInlineMarkdown } from '../utils/markdownParser'
 import { getNuxtFileIcon, detectMonacoLanguage } from '../utils/languageDetector'
 import logoImg from '../assets/logo.png'
@@ -10,6 +11,7 @@ import iconImg from '../assets/icon.png'
 
 const workspaceStore = useWorkspaceStore()
 const agentStore = useAgentStore()
+const settingsStore = useSettingsStore()
 const toast = useToast()
 
 const inputPrompt = ref('')
@@ -21,11 +23,16 @@ const fileInputRef = ref<HTMLInputElement | null>(null)
 const attachedImages = ref<string[]>([])
 const previewImageUrl = ref<string | null>(null)
 
-// Drag and Drop Attached Files
-interface AttachedFileItem {
+// Drag and Drop & Tagged Context Files
+export interface AttachedFileItem {
   path: string
   name: string
   isDirectory?: boolean
+  lineRange?: string
+  startLine?: number
+  endLine?: number
+  selectedSnippet?: string
+  language?: string
 }
 const attachedFiles = ref<AttachedFileItem[]>([])
 const isDraggingOver = ref<boolean>(false)
@@ -244,10 +251,54 @@ function adjustTextareaHeight(): void {
   })
 }
 
+function handleApprovalGlobalKeydown(e: KeyboardEvent): void {
+  if (!e.altKey) return
+
+  // Find any tool in agentStore.messages currently waiting for approval
+  let waitingTool: AgentToolCallItem | undefined
+  for (let i = agentStore.messages.length - 1; i >= 0; i--) {
+    const msg = agentStore.messages[i]
+    if (msg.toolCalls) {
+      const found = msg.toolCalls.find((t) => t.status === 'waiting_approval')
+      if (found) {
+        waitingTool = found
+        break
+      }
+    }
+  }
+
+  if (!waitingTool) return
+
+  // Alt + Enter -> Accept
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault()
+    e.stopPropagation()
+    agentStore.approveToolCall(waitingTool.id, true)
+    return
+  }
+
+  // Shift + Alt + Backspace / Delete -> Reject
+  if (e.shiftKey && (e.key === 'Backspace' || e.key === 'Delete')) {
+    e.preventDefault()
+    e.stopPropagation()
+    agentStore.approveToolCall(waitingTool.id, false)
+    return
+  }
+}
+
 onMounted(async () => {
   adjustTextareaHeight()
   agentStore.initListeners()
+  window.addEventListener('makarya:tag-to-agent', handleTagToAgentEvent)
+  window.addEventListener('makarya:focus-agent-chat', handleFocusAgentChat)
+  window.addEventListener('keydown', handleApprovalGlobalKeydown, true)
   await agentStore.loadModels()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('makarya:tag-to-agent', handleTagToAgentEvent)
+  window.removeEventListener('makarya:focus-agent-chat', handleFocusAgentChat)
+  window.removeEventListener('keydown', handleApprovalGlobalKeydown, true)
 })
 
 // Auto scroll to bottom when new messages, thoughts, or tokens stream in
@@ -609,10 +660,85 @@ function formatRelativePath(fullPath: string): string {
 
 function addAttachedFile(fileItem: AttachedFileItem): void {
   const exists = attachedFiles.value.some(
-    (f) => f.path.toLowerCase() === fileItem.path.toLowerCase()
+    (f) =>
+      f.path.toLowerCase() === fileItem.path.toLowerCase() &&
+      (f.lineRange || '') === (fileItem.lineRange || '')
   )
   if (!exists) {
     attachedFiles.value.push(fileItem)
+  }
+}
+
+function handleTagToAgentEvent(e: Event): void {
+  const customEvent = e as CustomEvent<AttachedFileItem>
+  const detail = customEvent.detail
+  if (!detail) return
+
+  const existingIndex = attachedFiles.value.findIndex(
+    (f) =>
+      f.path.toLowerCase() === detail.path.toLowerCase() &&
+      (f.lineRange || '') === (detail.lineRange || '')
+  )
+
+  if (existingIndex >= 0) {
+    attachedFiles.value[existingIndex] = {
+      ...attachedFiles.value[existingIndex],
+      ...detail
+    }
+  } else {
+    attachedFiles.value.push({
+      path: detail.path,
+      name: detail.name,
+      isDirectory: detail.isDirectory,
+      lineRange: detail.lineRange,
+      startLine: detail.startLine,
+      endLine: detail.endLine,
+      selectedSnippet: detail.selectedSnippet,
+      language: detail.language
+    })
+  }
+
+  nextTick(() => {
+    setTimeout(() => {
+      textareaRef.value?.focus()
+      adjustTextareaHeight()
+    }, 60)
+  })
+}
+
+function handleFocusAgentChat(): void {
+  nextTick(() => {
+    setTimeout(() => {
+      textareaRef.value?.focus()
+      adjustTextareaHeight()
+    }, 60)
+  })
+}
+
+async function navigateToCode(path?: string, name?: string, startLine?: number, endLine?: number): Promise<void> {
+  if (!path) return
+  const fileName = name || path.split(/[/\\]/).pop() || 'file'
+  await workspaceStore.openFile(path, fileName)
+  if (startLine) {
+    nextTick(() => {
+      setTimeout(() => {
+        const editor = workspaceStore.getActiveEditorInstance()
+        if (editor) {
+          editor.revealLineInCenter(startLine)
+          if (endLine && endLine > startLine) {
+            editor.setSelection({
+              startLineNumber: startLine,
+              startColumn: 1,
+              endLineNumber: endLine,
+              endColumn: editor.getModel()?.getLineMaxColumn(endLine) || 1
+            })
+          } else {
+            editor.setPosition({ lineNumber: startLine, column: 1 })
+          }
+          editor.focus()
+        }
+      }, 100)
+    })
   }
 }
 
@@ -783,13 +909,24 @@ async function handleSendMessage(customPrompt?: string): Promise<void> {
   const effectiveProjectRoot = connectedProject.value?.path || workspaceStore.getEffectiveProjectRoot()
 
   // Baca isi berkas yang dilampirkan via IPC
-  let attachedContexts: Array<{ filePath: string; fileName: string; content?: string; language?: string }> | undefined = undefined
+  let attachedContexts: Array<{
+    filePath: string
+    fileName: string
+    content?: string
+    language?: string
+    lineRange?: string
+    startLine?: number
+    endLine?: number
+    selectedSnippet?: string
+  }> | undefined = undefined
 
   if (filesToSend.length > 0) {
     attachedContexts = await Promise.all(
       filesToSend.map(async (f) => {
         let content = ''
-        if (!f.isDirectory && window.makaryaAPI?.readFile) {
+        if (f.selectedSnippet) {
+          content = f.selectedSnippet
+        } else if (!f.isDirectory && window.makaryaAPI?.readFile) {
           try {
             content = await window.makaryaAPI.readFile(f.path)
           } catch (err) {
@@ -803,7 +940,11 @@ async function handleSendMessage(customPrompt?: string): Promise<void> {
           filePath: f.path,
           fileName: f.name,
           content,
-          language: detectMonacoLanguage(f.name)
+          language: f.language || detectMonacoLanguage(f.name),
+          lineRange: f.lineRange,
+          startLine: f.startLine,
+          endLine: f.endLine,
+          selectedSnippet: f.selectedSnippet
         }
       })
     )
@@ -927,7 +1068,8 @@ function toggleModelMenu(): void {
 }
 
 function selectModel(modelName: string): void {
-  agentStore.selectedModel = modelName
+  agentStore.setSelectedModel(modelName)
+  settingsStore.ai.defaultModel = modelName
   isModelMenuOpen.value = false
   isSettingsMenuOpen.value = false
   modelSearchQuery.value = ''
@@ -1322,17 +1464,28 @@ async function openFileWithDiff(file: {
           v-if="message.role === 'user'"
           class="max-w-[92%] bg-gradient-to-br from-[#185338] via-[#144730] to-[#0f3826] hover:from-[#1b5e40] hover:to-[#12432d] border border-[#42b883]/45 text-emerald-50 px-3.5 py-2 rounded-2xl rounded-tr-xs shadow-md shadow-[#42b883]/10 select-text font-normal space-y-1.5 text-[11px] transition-all"
         >
-          <!-- Attached Files Badge List in User Bubble -->
-          <div v-if="message.attachedFiles && message.attachedFiles.length > 0" class="flex flex-wrap gap-1 pb-1">
-            <div
+          <!-- Attached Files / Tagged Code Badge List in User Bubble -->
+          <div v-if="message.attachedFiles && message.attachedFiles.length > 0" class="flex flex-wrap gap-1.5 pb-1">
+            <button
               v-for="(af, afIdx) in message.attachedFiles"
               :key="afIdx"
-              class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-black/40 border border-[#42b883]/30 text-emerald-200 text-[10px] font-mono shadow-xs"
-              :title="af.path"
+              type="button"
+              @click="navigateToCode(af.path, af.name, af.startLine, af.endLine)"
+              class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-black/40 hover:bg-black/60 border border-[#42b883]/30 hover:border-[#42b883]/60 text-emerald-200 text-[10px] font-mono shadow-xs transition-colors cursor-pointer text-left"
+              :title="af.path + (af.lineRange ? ` (${af.lineRange})\nKlik untuk lompat ke baris ini di editor` : '\nKlik untuk buka di editor')"
             >
-              <UIcon :name="getNuxtFileIcon(af.name).icon" class="size-3 text-[#42b883] flex-shrink-0" />
+              <UIcon
+                :name="af.lineRange ? 'i-lucide-code-xml' : getNuxtFileIcon(af.name).icon"
+                class="size-3 text-[#42b883] flex-shrink-0"
+              />
               <span class="truncate max-w-[150px]">{{ af.name }}</span>
-            </div>
+              <span
+                v-if="af.lineRange"
+                class="text-[9px] px-1 py-0.2 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-bold"
+              >
+                {{ af.lineRange }}
+              </span>
+            </button>
           </div>
 
           <!-- Attached Images Grid -->
@@ -1423,10 +1576,17 @@ async function openFileWithDiff(file: {
                 <div class="flex items-center gap-1.5 flex-shrink-0">
                   <!-- Status Pill Badge in Pill Style -->
                   <span
-                    v-if="tool.status === 'running'"
-                    class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-medium bg-amber-500/10 text-amber-300 border border-amber-500/25 shadow-xs"
+                    v-if="tool.status === 'waiting_approval'"
+                    class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-medium bg-amber-500/15 text-amber-300 border border-amber-500/35 shadow-xs animate-pulse"
                   >
-                    <UIcon name="i-lucide-loader-2" class="size-2.5 animate-spin text-amber-400" />
+                    <UIcon name="i-lucide-shield-alert" class="size-2.5 text-amber-400" />
+                    <span>Minta Izin</span>
+                  </span>
+                  <span
+                    v-else-if="tool.status === 'running'"
+                    class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-medium bg-cyan-500/10 text-cyan-300 border border-cyan-500/25 shadow-xs"
+                  >
+                    <UIcon name="i-lucide-loader-2" class="size-2.5 animate-spin text-cyan-400" />
                     <span>Menjalankan</span>
                   </span>
                   <span
@@ -1450,6 +1610,57 @@ async function openFileWithDiff(file: {
                     :name="isToolExpanded(tool) ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'"
                     class="size-3 text-slate-400 ml-0.5"
                   />
+                </div>
+              </div>
+
+              <!-- Approval Action Box (Ketika Auto Execution = Ask Before Execution) -->
+              <div
+                v-if="tool.status === 'waiting_approval'"
+                class="p-2.5 bg-[#0a0f19] border-t border-amber-500/25 space-y-2 select-none animate-in fade-in duration-150"
+              >
+                <!-- Top Header & Command Block -->
+                <div class="flex items-start gap-2">
+                  <div class="w-5 h-5 rounded-md bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 flex-shrink-0 mt-0.5">
+                    <UIcon name="i-lucide-shield-alert" class="size-3" />
+                  </div>
+                  <div class="flex-1 min-w-0">
+                    <div class="flex items-center justify-between gap-1.5">
+                      <span class="font-semibold text-amber-300 text-[10px]">Konfirmasi Eksekusi Terminal</span>
+                      <span class="text-[8px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 font-mono flex-shrink-0">Ask Before</span>
+                    </div>
+                    <div
+                      class="mt-1 px-2 py-1 rounded-md bg-[#070b12] border border-white/[0.08] font-mono text-[10px] text-emerald-300 font-medium truncate flex items-center gap-1.5 shadow-inner"
+                      :title="tool.args?.command"
+                    >
+                      <span class="text-slate-500 select-none flex-shrink-0">$</span>
+                      <span class="truncate">{{ tool.args?.command || getToolDisplayLabel(tool) }}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Action Buttons: Antigravity Capsule Style (Matching Gambar 2) -->
+                <div class="flex items-center gap-1.5 p-1 rounded-full bg-[#080d16] border border-white/[0.08] shadow-inner">
+                  <!-- Accept Button -->
+                  <button
+                    type="button"
+                    @click.stop="agentStore.approveToolCall(tool.id, true)"
+                    class="flex-1 py-1.5 px-3 rounded-full bg-[#34c784] hover:bg-[#2eb376] text-slate-950 font-semibold text-[11px] flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer hover:brightness-105 active:scale-95"
+                    title="Accept & Jalankan Perintah (Alt+Enter)"
+                  >
+                    <span class="tracking-tight">Accept</span>
+                    <span class="px-1.5 py-0.5 rounded-full bg-black/20 text-slate-950 font-mono text-[9px] font-bold leading-none select-none">Alt+↵</span>
+                  </button>
+
+                  <!-- Reject Button -->
+                  <button
+                    type="button"
+                    @click.stop="agentStore.approveToolCall(tool.id, false)"
+                    class="flex-1 py-1.5 px-3 rounded-full bg-[#24131d] hover:bg-[#321725] border border-[#78283d] text-[#f7a8b8] hover:text-white font-semibold text-[11px] flex items-center justify-center gap-1.5 transition-all cursor-pointer active:scale-95"
+                    title="Reject / Batalkan Perintah (Shift+Alt+Backspace)"
+                  >
+                    <span class="tracking-tight">Reject</span>
+                    <span class="px-1.5 py-0.5 rounded-full bg-white/10 text-[#f7a8b8] font-mono text-[9px] font-medium leading-none select-none">Shift+Alt+⌫</span>
+                  </button>
                 </div>
               </div>
 
@@ -1788,7 +1999,7 @@ async function openFileWithDiff(file: {
       <!-- Unified AI Settings Popover (Ruang Kerja, Model AI, & Konteks) -->
       <div
         v-if="isSettingsMenuOpen"
-        class="absolute bottom-16 left-2 right-2 max-h-[440px] flex flex-col bg-[#0c121d]/98 border border-white/[0.12] rounded-2xl shadow-2xl backdrop-blur-2xl z-40 p-3 space-y-3 animate-in fade-in zoom-in-95 duration-150 select-none overflow-hidden"
+        class="absolute bottom-16 left-2 right-2 max-h-[520px] flex flex-col bg-[#0c121d]/98 border border-white/[0.12] rounded-2xl shadow-2xl backdrop-blur-2xl z-40 p-3 space-y-3 animate-in fade-in zoom-in-95 duration-150 select-none overflow-hidden"
       >
         <!-- Header -->
         <div class="flex items-center justify-between pb-2 border-b border-white/[0.08] flex-shrink-0">
@@ -1893,8 +2104,8 @@ async function openFileWithDiff(file: {
                 >
                   <UIcon name="i-lucide-refresh-cw" class="size-2.5" :class="{ 'animate-spin': agentStore.isModelsLoading }" />
                 </button>
-                <span v-if="agentStore.selectedModel" class="text-[9px] px-1.5 py-0.5 rounded bg-[#42b883]/15 text-[#42b883] font-mono font-medium truncate max-w-[120px]" :title="agentStore.selectedModel">
-                  {{ agentStore.selectedModel }}
+                <span v-if="agentStore.selectedModel || settingsStore.ai.defaultModel" class="text-[9px] px-1.5 py-0.5 rounded bg-[#42b883]/15 text-[#42b883] font-mono font-medium truncate max-w-[120px]" :title="agentStore.selectedModel || settingsStore.ai.defaultModel">
+                  {{ agentStore.selectedModel || settingsStore.ai.defaultModel }}
                 </span>
                 <span v-else class="text-[9px] px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-300 font-mono font-medium">
                   Kosong
@@ -1927,12 +2138,12 @@ async function openFileWithDiff(file: {
                 :key="m"
                 @click="selectModel(m)"
                 class="w-full px-2 py-1.5 rounded-lg text-left text-[11px] transition-all flex items-center justify-between group cursor-pointer"
-                :class="agentStore.selectedModel === m
+                :class="(agentStore.selectedModel || settingsStore.ai.defaultModel) === m
                   ? 'bg-[#42b883]/15 text-[#42b883] font-semibold border border-[#42b883]/30'
                   : 'text-slate-300 hover:bg-white/[0.04] border border-transparent'"
               >
                 <span class="truncate pr-1">{{ m }}</span>
-                <UIcon v-if="agentStore.selectedModel === m" name="i-lucide-check-circle-2" class="size-3 text-[#42b883] flex-shrink-0" />
+                <UIcon v-if="(agentStore.selectedModel || settingsStore.ai.defaultModel) === m" name="i-lucide-check-circle-2" class="size-3 text-[#42b883] flex-shrink-0" />
               </button>
 
               <div v-if="filteredModels.length === 0" class="py-2.5 text-center text-slate-500 text-[10px] space-y-1">
@@ -1948,7 +2159,69 @@ async function openFileWithDiff(file: {
             </div>
           </div>
 
-          <!-- Section 3: Active Context Toggle -->
+          <!-- Section 3: Permissions (Auto Execution & Review Policy - Sesuai Gambar 2 Antigravity) -->
+          <div class="space-y-2 pt-2 border-t border-white/[0.06]">
+            <div class="flex items-center justify-between text-[11px] font-medium text-slate-300">
+              <span class="flex items-center gap-1.5 text-[#42b883]">
+                <UIcon name="i-lucide-shield-check" class="size-3.5" />
+                Permissions
+              </span>
+            </div>
+
+            <div class="space-y-2 text-[11px]">
+              <!-- Auto Execution Row (Persis seperti Gambar 2 Antigravity) -->
+              <div class="flex items-center justify-between gap-3">
+                <div class="flex items-center gap-1.5 text-slate-300 select-none">
+                  <span class="font-normal text-[11px] text-slate-200">Auto Execution</span>
+                  <span
+                    class="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full text-[10px] text-slate-400 hover:text-slate-200 hover:bg-white/10 cursor-help transition-colors"
+                    title="Controls whether commands and tools can run automatically or require user approval before execution."
+                  >
+                    ⓘ
+                  </span>
+                </div>
+
+                <div class="relative min-w-[140px]">
+                  <select
+                    v-model="settingsStore.ai.autoExecution"
+                    class="w-full bg-[#131d2e] hover:bg-[#182438] border border-white/[0.1] hover:border-white/[0.2] text-slate-200 text-[11px] rounded-lg px-2.5 py-1 pr-6 appearance-none focus:outline-none focus:border-[#42b883]/60 cursor-pointer transition-colors"
+                  >
+                    <option value="always_proceed">Always Proceed</option>
+                    <option value="ask_before">Ask Before Execution</option>
+                    <option value="never">Never Execute</option>
+                  </select>
+                  <UIcon name="i-lucide-chevron-down" class="size-3 text-slate-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+                </div>
+              </div>
+
+              <!-- Review Policy Row (Persis seperti Gambar 2 Antigravity) -->
+              <div class="flex items-center justify-between gap-3">
+                <div class="flex items-center gap-1.5 text-slate-300 select-none">
+                  <span class="font-normal text-[11px] text-slate-200">Review Policy</span>
+                  <span
+                    class="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full text-[10px] text-slate-400 hover:text-slate-200 hover:bg-white/10 cursor-help transition-colors"
+                    title="Controls how code modifications and file edits are reviewed and applied."
+                  >
+                    ⓘ
+                  </span>
+                </div>
+
+                <div class="relative min-w-[140px]">
+                  <select
+                    v-model="settingsStore.ai.reviewPolicy"
+                    class="w-full bg-[#131d2e] hover:bg-[#182438] border border-white/[0.1] hover:border-white/[0.2] text-slate-200 text-[11px] rounded-lg px-2.5 py-1 pr-6 appearance-none focus:outline-none focus:border-[#42b883]/60 cursor-pointer transition-colors"
+                  >
+                    <option value="request_review">Request Review</option>
+                    <option value="auto_apply">Auto Apply</option>
+                    <option value="always_ask">Always Ask</option>
+                  </select>
+                  <UIcon name="i-lucide-chevron-down" class="size-3 text-slate-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Section 4: Active Context Toggle -->
           <div class="pt-2 border-t border-white/[0.06]">
             <label class="flex items-center gap-2 cursor-pointer group select-none">
               <input
@@ -1991,24 +2264,31 @@ async function openFileWithDiff(file: {
         class="bg-[#0c121d]/90 border border-white/[0.08] hover:border-white/[0.14] focus-within:border-[#42b883]/50 focus-within:ring-1 focus-within:ring-[#42b883]/25 rounded-2xl p-2.5 shadow-xl transition-all duration-200 space-y-1.5"
         @paste="handlePaste"
       >
-        <!-- Attached Files Strip (from Drag and Drop) inside input pill -->
+        <!-- Attached Files & Tagged Code Strip inside input pill -->
         <div v-if="attachedFiles.length > 0" class="flex flex-wrap gap-1.5 pb-1 pt-0.5">
           <div
             v-for="(f, fIdx) in attachedFiles"
-            :key="f.path + fIdx"
-            class="group inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#131d2e] border border-white/[0.1] hover:border-[#42b883]/40 text-slate-200 text-[10px] shadow-sm max-w-full transition-all"
-            :title="f.path"
+            :key="f.path + (f.lineRange || '') + fIdx"
+            class="group inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#131d2e] border border-white/[0.1] hover:border-[#42b883]/40 text-slate-200 text-[10px] shadow-sm max-w-full transition-colors"
+            :title="f.selectedSnippet ? `${f.path} (${f.lineRange})\n\n${f.selectedSnippet.slice(0, 300)}` : f.path"
           >
             <UIcon
-              :name="f.isDirectory ? 'i-lucide-folder' : getNuxtFileIcon(f.name).icon"
+              :name="f.isDirectory ? 'i-lucide-folder' : (f.lineRange ? 'i-lucide-code-xml' : getNuxtFileIcon(f.name).icon)"
               class="size-3.5 flex-shrink-0"
-              :class="f.isDirectory ? 'text-amber-400' : getNuxtFileIcon(f.name).colorClass"
+              :class="f.isDirectory ? 'text-amber-400' : (f.lineRange ? 'text-emerald-400' : getNuxtFileIcon(f.name).colorClass)"
             />
-            <span class="truncate max-w-[140px] font-medium">{{ f.name }}</span>
+            <span class="truncate max-w-[130px] font-medium">{{ f.name }}</span>
+            <span
+              v-if="f.lineRange"
+              class="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 font-mono font-medium flex-shrink-0"
+            >
+              {{ f.lineRange }}
+            </span>
             <button
+              type="button"
               @click.stop="removeAttachedFile(fIdx)"
               class="w-3.5 h-3.5 rounded-full hover:bg-rose-500/20 hover:text-rose-400 flex items-center justify-center text-slate-400 transition-colors cursor-pointer"
-              title="Hapus lampiran berkas"
+              title="Hapus lampiran"
             >
               <UIcon name="i-lucide-x" class="size-2.5" />
             </button>
@@ -2039,7 +2319,7 @@ async function openFileWithDiff(file: {
           ref="textareaRef"
           v-model="inputPrompt"
           rows="1"
-          :placeholder="!connectedProject ? '🔒 Tetapkan folder target project terlebih dahulu...' : 'Ask anything, paste (Ctrl+V), @, /'"
+          :placeholder="!connectedProject ? '🔒 Tetapkan folder target project terlebih dahulu...' : 'Ask anything, tag code (Ctrl+L), paste (Ctrl+V), @, /'"
           class="w-full bg-transparent border-none text-[11px] text-slate-100 placeholder:text-slate-500 focus:outline-none resize-none p-0 leading-relaxed font-sans min-h-[22px] max-h-[160px]"
           :class="{ 'opacity-40 cursor-not-allowed select-none': !connectedProject }"
           @input="adjustTextareaHeight"

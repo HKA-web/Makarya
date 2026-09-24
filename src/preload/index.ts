@@ -82,16 +82,26 @@ const makaryaAPI = {
       name?: string
     }>
     projectRoot?: string
+    autoExecution?: string
   }): Promise<{ accepted: boolean }> =>
     ipcRenderer.invoke('agent:chat-stream', payload),
   abortChatMessage: (requestId: string): Promise<{ aborted: boolean }> =>
     ipcRenderer.invoke('agent:chat-abort', requestId),
+  respondToolApproval: (toolCallId: string, approved: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('agent:respond-tool-approval', toolCallId, approved),
   fetchAvailableModels: (): Promise<string[]> =>
     ipcRenderer.invoke('agent:get-models'),
   updateAiConfig: (config: { baseUrl?: string; apiKey?: string }): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('agent:update-config', config),
   getAiConfig: (): Promise<{ baseUrl: string; apiKey: string; defaultModel: string }> =>
     ipcRenderer.invoke('agent:get-config'),
+  onAgentToolRequireApproval: (callback: (data: { requestId: string; toolCallId: string; toolName: string; args: any }) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, data: { requestId: string; toolCallId: string; toolName: string; args: any }): void => callback(data)
+    ipcRenderer.on('agent:tool-require-approval', listener)
+    return (): void => {
+      ipcRenderer.removeListener('agent:tool-require-approval', listener)
+    }
+  },
   onAgentStreamToken: (callback: (data: { requestId: string; deltaContent: string }) => void): (() => void) => {
     const listener = (_event: IpcRendererEvent, data: { requestId: string; deltaContent: string }): void => callback(data)
     ipcRenderer.on('agent:stream-token', listener)

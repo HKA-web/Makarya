@@ -21,6 +21,7 @@ declare module 'vue' {
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     SettingsModal: typeof import('./src/components/SettingsModal.vue')['default']
+    TabSwitcherModal: typeof import('./src/components/TabSwitcherModal.vue')['default']
     TerminalPanel: typeof import('./src/components/TerminalPanel.vue')['default']
     UApp: typeof import('./../../node_modules/@nuxt/ui/dist/runtime/components/App.vue')['default']
     UIcon: typeof import('./../../node_modules/@nuxt/ui/dist/runtime/vue/components/Icon.vue')['default']

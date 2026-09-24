@@ -9,6 +9,7 @@ import { useAgentStore } from './stores/agentStore'
 import CommandPalette from './components/CommandPalette.vue'
 import QuickOpenModal from './components/QuickOpenModal.vue'
 import WindowSwitcherModal from './components/WindowSwitcherModal.vue'
+import TabSwitcherModal from './components/TabSwitcherModal.vue'
 import SettingsModal from './components/SettingsModal.vue'
 import MonacoEditor from './components/MonacoEditor.vue'
 import FileExplorer from './components/FileExplorer.vue'
@@ -64,6 +65,84 @@ async function handleGlobalKeyboard(event: KeyboardEvent): Promise<void> {
   } else if (isModifier && (event.key === '`' || event.key === '~')) {
     event.preventDefault()
     workspaceStore.toggleBottomPanel()
+  } else if (isModifier && event.key === 'Tab') {
+    event.preventDefault()
+    event.stopPropagation()
+    if (workspaceStore.tabList.length > 0) {
+      workspaceStore.toggleTabSwitcher(true)
+    }
+  } else if (isModifier && event.key.toLowerCase() === 'l') {
+    event.preventDefault()
+    event.stopPropagation()
+    handleTagSelectionToChat()
+  }
+}
+
+function handleTagSelectionToChat(): void {
+  if (!workspaceStore.isCopilotPanelOpen) {
+    workspaceStore.isCopilotPanelOpen = true
+  }
+
+  const editor = workspaceStore.getActiveEditorInstance()
+  const activeTab = workspaceStore.activeTab
+
+  if (editor) {
+    const selection = editor.getSelection()
+    const model = editor.getModel()
+    if (model) {
+      let snippet = ''
+      let startLine = 1
+      let endLine = 1
+      let lineRange = ''
+
+      if (selection && !selection.isEmpty()) {
+        snippet = model.getValueInRange(selection)
+        startLine = selection.startLineNumber
+        endLine = selection.endLineNumber
+        lineRange = startLine === endLine ? `L${startLine}` : `L${startLine}-L${endLine}`
+      } else {
+        const pos = editor.getPosition()
+        if (pos) {
+          startLine = pos.lineNumber
+          endLine = pos.lineNumber
+          snippet = model.getLineContent(pos.lineNumber)
+          lineRange = `L${startLine}`
+        }
+      }
+
+      const filePath = activeTab?.filePath || ''
+      const fileName = activeTab?.title || (filePath ? filePath.split(/[/\\]/).pop() || 'Untitled' : 'Untitled')
+      const language = activeTab?.language || 'plaintext'
+
+      window.dispatchEvent(
+        new CustomEvent('makarya:tag-to-agent', {
+          detail: {
+            path: filePath,
+            name: fileName,
+            startLine,
+            endLine,
+            lineRange,
+            selectedSnippet: snippet,
+            language
+          }
+        })
+      )
+      return
+    }
+  }
+
+  if (activeTab && activeTab.filePath) {
+    window.dispatchEvent(
+      new CustomEvent('makarya:tag-to-agent', {
+        detail: {
+          path: activeTab.filePath,
+          name: activeTab.title,
+          language: activeTab.language
+        }
+      })
+    )
+  } else {
+    window.dispatchEvent(new CustomEvent('makarya:focus-agent-chat'))
   }
 }
 
@@ -88,7 +167,7 @@ function handleWindowClick(event: MouseEvent): void {
 }
 
 onMounted(async () => {
-  window.addEventListener('keydown', handleGlobalKeyboard)
+  window.addEventListener('keydown', handleGlobalKeyboard, true)
   window.addEventListener('click', handleWindowClick)
   if (window.makaryaAPI?.isWindowMaximized) {
     isWindowMaximized.value = await window.makaryaAPI.isWindowMaximized()
@@ -108,7 +187,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  window.removeEventListener('keydown', handleGlobalKeyboard)
+  window.removeEventListener('keydown', handleGlobalKeyboard, true)
   window.removeEventListener('click', handleWindowClick)
   cleanupWindowStateListener?.()
 })
@@ -233,7 +312,7 @@ function handleMenuToggleCopilot(): void {
             >
               <button
                 @click="handleMenuOpenFile"
-                class="w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between text-slate-300 hover:text-white hover:bg-[#42b883]/15 hover:border hover:border-[#42b883]/30 transition-all cursor-pointer text-left group"
+                class="w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between text-slate-300 hover:text-white hover:bg-[#42b883]/15 border border-transparent hover:border-[#42b883]/30 cursor-pointer text-left group"
               >
                 <div class="flex items-center gap-2">
                   <UIcon name="i-lucide-folder-open" class="size-3.5 text-[#42b883]" />
@@ -244,7 +323,7 @@ function handleMenuToggleCopilot(): void {
 
               <button
                 @click="handleMenuAddWorkspace"
-                class="w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between text-slate-300 hover:text-white hover:bg-[#42b883]/15 hover:border hover:border-[#42b883]/30 transition-all cursor-pointer text-left group"
+                class="w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between text-slate-300 hover:text-white hover:bg-[#42b883]/15 border border-transparent hover:border-[#42b883]/30 cursor-pointer text-left group"
               >
                 <div class="flex items-center gap-2">
                   <UIcon name="i-lucide-folder-plus" class="size-3.5 text-[#42b883]" />
@@ -258,7 +337,7 @@ function handleMenuToggleCopilot(): void {
               <button
                 v-if="workspaceStore.activeTab.filePath"
                 @click="handleMenuSaveFile"
-                class="w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between text-slate-300 hover:text-white hover:bg-[#42b883]/15 hover:border hover:border-[#42b883]/30 transition-all cursor-pointer text-left group"
+                class="w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between text-slate-300 hover:text-white hover:bg-[#42b883]/15 border border-transparent hover:border-[#42b883]/30 cursor-pointer text-left group"
               >
                 <div class="flex items-center gap-2">
                   <UIcon name="i-lucide-save" class="size-3.5 text-amber-400" />
@@ -270,7 +349,7 @@ function handleMenuToggleCopilot(): void {
               <button
                 v-if="workspaceStore.activeTabId"
                 @click="handleMenuCloseTab"
-                class="w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between text-slate-300 hover:text-white hover:bg-rose-500/15 hover:border hover:border-rose-500/30 transition-all cursor-pointer text-left group"
+                class="w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between text-slate-300 hover:text-white hover:bg-rose-500/15 border border-transparent hover:border-rose-500/30 cursor-pointer text-left group"
               >
                 <div class="flex items-center gap-2">
                   <UIcon name="i-lucide-x" class="size-3.5 text-rose-400" />
@@ -283,7 +362,7 @@ function handleMenuToggleCopilot(): void {
 
               <button
                 @click="handleClose"
-                class="w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between text-slate-300 hover:text-rose-300 hover:bg-rose-500/15 transition-all cursor-pointer text-left"
+                class="w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between text-slate-300 hover:text-rose-300 hover:bg-rose-500/15 border border-transparent hover:border-rose-500/30 cursor-pointer text-left group"
               >
                 <div class="flex items-center gap-2">
                   <UIcon name="i-lucide-log-out" class="size-3.5 text-rose-400" />
@@ -312,7 +391,7 @@ function handleMenuToggleCopilot(): void {
             >
               <button
                 @click="handleMenuCommandPalette"
-                class="w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between text-slate-300 hover:text-white hover:bg-[#42b883]/15 hover:border hover:border-[#42b883]/30 transition-all cursor-pointer text-left group"
+                class="w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between text-slate-300 hover:text-white hover:bg-[#42b883]/15 border border-transparent hover:border-[#42b883]/30 cursor-pointer text-left group"
               >
                 <div class="flex items-center gap-2">
                   <UIcon name="i-lucide-command" class="size-3.5 text-[#42b883]" />
@@ -323,7 +402,7 @@ function handleMenuToggleCopilot(): void {
 
               <button
                 @click="handleMenuToggleCopilot"
-                class="w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between text-slate-300 hover:text-white hover:bg-[#42b883]/15 hover:border hover:border-[#42b883]/30 transition-all cursor-pointer text-left group"
+                class="w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between text-slate-300 hover:text-white hover:bg-[#42b883]/15 border border-transparent hover:border-[#42b883]/30 cursor-pointer text-left group"
               >
                 <div class="flex items-center gap-2">
                   <UIcon name="i-lucide-sparkles" class="size-3.5 text-[#42b883]" />
@@ -559,7 +638,7 @@ function handleMenuToggleCopilot(): void {
             :key="tab.id"
             @click="workspaceStore.setActiveTab(tab.id)"
             :class="[
-              'h-7 px-3 flex items-center gap-2 text-xs rounded-xl cursor-pointer select-none transition-all duration-150 group relative',
+              'h-7 px-3 flex items-center gap-2 text-xs rounded-xl cursor-pointer select-none group relative',
               workspaceStore.activeTabId === tab.id
                 ? 'bg-[#131d2e] text-[#42b883] font-medium border border-[#42b883]/30 shadow-xs'
                 : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04] border border-transparent'
@@ -577,7 +656,7 @@ function handleMenuToggleCopilot(): void {
             ></span>
             <button
               @click.stop="workspaceStore.closeTab(tab.id)"
-              class="w-4 h-4 rounded-md flex items-center justify-center transition-all ml-1 cursor-pointer flex-shrink-0"
+              class="w-4 h-4 rounded-md flex items-center justify-center ml-1 cursor-pointer flex-shrink-0"
               :class="workspaceStore.activeTabId === tab.id
                 ? 'text-slate-300 hover:text-rose-400 hover:bg-rose-500/20'
                 : 'text-slate-400/80 hover:text-rose-400 hover:bg-white/[0.08]'"
@@ -658,6 +737,7 @@ function handleMenuToggleCopilot(): void {
     </footer>
 
     <!-- Global Modals & Services -->
+    <TabSwitcherModal />
     <WindowSwitcherModal />
     <QuickOpenModal />
     <CommandPalette />

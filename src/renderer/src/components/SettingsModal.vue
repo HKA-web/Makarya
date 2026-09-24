@@ -455,6 +455,60 @@ async function handleSync9Router(): Promise<void> {
           </div>
         </div>
 
+        <!-- Section: Permissions (Auto Execution & Review Policy - Sesuai Gambar 2 Antigravity) -->
+        <div class="space-y-3 pt-3 border-t border-white/[0.06]">
+          <div class="flex items-center gap-1.5 text-xs font-semibold text-slate-200">
+            <UIcon name="i-lucide-shield-check" class="size-4 text-[#42b883]" />
+            Permissions & Execution Policy
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <!-- Auto Execution -->
+            <div class="p-3 rounded-xl bg-white/[0.02] border border-white/[0.06] space-y-1.5">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-semibold text-slate-200 flex items-center gap-1">
+                  Auto Execution
+                  <span class="text-slate-400 text-[10px] cursor-help" title="Controls whether commands and tools can run automatically or require user approval before execution.">ⓘ</span>
+                </span>
+              </div>
+              <div class="relative">
+                <select
+                  v-model="settingsStore.ai.autoExecution"
+                  class="w-full bg-[#131d2e] border border-white/[0.1] text-slate-200 text-xs rounded-lg px-2.5 py-1.5 pr-7 appearance-none focus:outline-none focus:border-[#42b883]/60 cursor-pointer"
+                >
+                  <option value="always_proceed">Always Proceed</option>
+                  <option value="ask_before">Ask Before Execution</option>
+                  <option value="never">Never Execute</option>
+                </select>
+                <UIcon name="i-lucide-chevron-down" class="size-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              </div>
+              <p class="text-[10px] text-slate-400">Izinkan eksekusi tool otomatis atau selalu minta konfirmasi.</p>
+            </div>
+
+            <!-- Review Policy -->
+            <div class="p-3 rounded-xl bg-white/[0.02] border border-white/[0.06] space-y-1.5">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-semibold text-slate-200 flex items-center gap-1">
+                  Review Policy
+                  <span class="text-slate-400 text-[10px] cursor-help" title="Controls how code modifications and file edits are reviewed and applied.">ⓘ</span>
+                </span>
+              </div>
+              <div class="relative">
+                <select
+                  v-model="settingsStore.ai.reviewPolicy"
+                  class="w-full bg-[#131d2e] border border-white/[0.1] text-slate-200 text-xs rounded-lg px-2.5 py-1.5 pr-7 appearance-none focus:outline-none focus:border-[#42b883]/60 cursor-pointer"
+                >
+                  <option value="request_review">Request Review</option>
+                  <option value="auto_apply">Auto Apply</option>
+                  <option value="always_ask">Always Ask</option>
+                </select>
+                <UIcon name="i-lucide-chevron-down" class="size-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              </div>
+              <p class="text-[10px] text-slate-400">Tampilkan preview diff atau langsung simpan modifikasi berkas.</p>
+            </div>
+          </div>
+        </div>
+
         <!-- Section: Context & Thoughts Toggles -->
         <div class="space-y-2.5 pt-3 border-t border-white/[0.06]">
           <!-- Auto Context -->

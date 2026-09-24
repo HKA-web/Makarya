@@ -269,6 +269,17 @@ onMounted(() => {
     cursorBlinking: settingsStore.editor.cursorBlinking
   })
 
+  // Register active editor instance globally
+  workspaceStore.setActiveEditorInstance(editorInstance)
+
+  editorInstance.onDidFocusEditorText(() => {
+    workspaceStore.setActiveEditorInstance(editorInstance)
+  })
+
+  editorInstance.onDidFocusEditorWidget(() => {
+    workspaceStore.setActiveEditorInstance(editorInstance)
+  })
+
   function saveCurrentViewState(): void {
     if (!editorInstance || isDiffActive.value) return
     const pos = editorInstance.getPosition()
@@ -379,6 +390,16 @@ onMounted(() => {
     }
   )
 
+  // Register Ctrl+L to tag selected code into Copilot Agent Chat
+  editorInstance.addAction({
+    id: 'makarya.tagCodeToAgent',
+    label: 'Tag Selected Lines to Chat Agent',
+    keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyL],
+    run: (ed) => {
+      tagEditorSelectionToAgent(ed)
+    }
+  })
+
   // Observe container size
   resizeObserver = new ResizeObserver(() => {
     editorInstance?.layout()
@@ -392,6 +413,74 @@ onMounted(() => {
     applyDiffDecorations()
   }
 })
+
+function tagEditorSelectionToAgent(ed?: monaco.editor.IStandaloneCodeEditor | null): void {
+  const currentEd = ed || editorInstance || workspaceStore.getActiveEditorInstance()
+  const activeTab = workspaceStore.activeTab
+
+  if (!workspaceStore.isCopilotPanelOpen) {
+    workspaceStore.isCopilotPanelOpen = true
+  }
+
+  if (currentEd) {
+    const selection = currentEd.getSelection()
+    const model = currentEd.getModel()
+    if (model) {
+      let snippet = ''
+      let startLine = 1
+      let endLine = 1
+      let lineRange = ''
+
+      if (selection && !selection.isEmpty()) {
+        snippet = model.getValueInRange(selection)
+        startLine = selection.startLineNumber
+        endLine = selection.endLineNumber
+        lineRange = startLine === endLine ? `L${startLine}` : `L${startLine}-L${endLine}`
+      } else {
+        const pos = currentEd.getPosition()
+        if (pos) {
+          startLine = pos.lineNumber
+          endLine = pos.lineNumber
+          snippet = model.getLineContent(pos.lineNumber)
+          lineRange = `L${startLine}`
+        }
+      }
+
+      const filePath = props.filePath || activeTab?.filePath || ''
+      const fileName = activeTab?.title || (filePath ? filePath.split(/[/\\]/).pop() || 'Untitled' : 'Untitled')
+      const language = props.language || activeTab?.language || 'plaintext'
+
+      window.dispatchEvent(
+        new CustomEvent('makarya:tag-to-agent', {
+          detail: {
+            path: filePath,
+            name: fileName,
+            startLine,
+            endLine,
+            lineRange,
+            selectedSnippet: snippet,
+            language
+          }
+        })
+      )
+      return
+    }
+  }
+
+  if (activeTab && activeTab.filePath) {
+    window.dispatchEvent(
+      new CustomEvent('makarya:tag-to-agent', {
+        detail: {
+          path: activeTab.filePath,
+          name: activeTab.title,
+          language: activeTab.language
+        }
+      })
+    )
+  } else {
+    window.dispatchEvent(new CustomEvent('makarya:focus-agent-chat'))
+  }
+}
 
 // React when active diff changes
 watch(
@@ -462,6 +551,9 @@ onBeforeUnmount(() => {
 })
 
 onUnmounted(() => {
+  if (workspaceStore.getActiveEditorInstance() === editorInstance) {
+    workspaceStore.setActiveEditorInstance(null)
+  }
   resizeObserver?.disconnect()
   decorationsCollection?.clear()
   editorInstance?.dispose()

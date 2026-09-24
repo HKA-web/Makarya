@@ -618,6 +618,11 @@ function registerIpcHandlers(): void {
     return { aborted: isAborted }
   })
 
+  // AI Agent Respond to Tool Execution Approval (Ask Before Execution)
+  ipcMain.handle('agent:respond-tool-approval', async (_event, toolCallId: string, approved: boolean) => {
+    return aiAgentService.respondToolApproval(toolCallId, approved)
+  })
+
   // AI Agent Fetch Models
   ipcMain.handle('agent:get-models', async () => {
     return aiAgentService.fetchAvailableModels()
