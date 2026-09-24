@@ -6,6 +6,7 @@ import { useAgentStore, type AgentToolCallItem } from '../stores/agentStore'
 import { parseMarkdownBlocks, formatInlineMarkdown } from '../utils/markdownParser'
 import { getNuxtFileIcon, detectMonacoLanguage } from '../utils/languageDetector'
 import logoImg from '../assets/logo.png'
+import iconImg from '../assets/icon.png'
 
 const workspaceStore = useWorkspaceStore()
 const agentStore = useAgentStore()
@@ -1178,7 +1179,7 @@ async function openFileWithDiff(file: {
     <!-- Compact Copilot & Autonomous Agent Header -->
     <div class="h-9 px-3 border-b border-white/[0.06] flex items-center justify-between text-[11px] font-semibold bg-[#0b101b]/95 backdrop-blur-md">
       <div class="flex items-center gap-2">
-        <img :src="logoImg" alt="Makarya" class="h-5 w-auto object-contain" />
+        <img :src="iconImg" alt="Makarya" class="h-5 w-auto object-contain" />
         <span class="vue-gradient-text font-bold tracking-wide text-xs">
           Makarya AI Agent
         </span>
@@ -1234,7 +1235,7 @@ async function openFileWithDiff(file: {
         <div class="relative group mb-4">
           <div class="absolute -inset-1.5 bg-gradient-to-r from-[#42b883]/30 via-[#34d399]/20 to-[#42b883]/30 rounded-3xl blur-md opacity-75 group-hover:opacity-100 transition duration-500"></div>
           <div class="relative w-20 h-20 sm:w-22 sm:h-22 rounded-2xl bg-[#0c121d] border border-[#42b883]/35 shadow-xl shadow-[#42b883]/15 flex items-center justify-center p-3.5">
-            <img :src="logoImg" alt="Makarya" class="w-full h-full object-contain filter drop-shadow-[0_0_10px_rgba(66,184,131,0.6)]" />
+            <img :src="iconImg" alt="Makarya" class="w-full h-full object-contain filter drop-shadow-[0_0_10px_rgba(66,184,131,0.6)]" />
           </div>
         </div>
 
@@ -1309,7 +1310,7 @@ async function openFileWithDiff(file: {
             Anda
           </span>
           <span v-else class="font-semibold text-[#42b883] flex items-center gap-1.5">
-            <img :src="logoImg" alt="Makarya" class="h-4.5 w-auto object-contain" />
+            <img :src="iconImg" alt="Makarya" class="h-4.5 w-auto object-contain" />
             Makarya Agent
           </span>
           <span>•</span>
@@ -1964,7 +1965,7 @@ async function openFileWithDiff(file: {
         </div>
       </div>
 
-      <!-- Barrier Card: Tampil ketika target project belum ditetapkan -->
+      <!-- Barrier Card: Tampil ketika target project belum ditetapkan (Tombol Dihapus Sesuai Permintaan) -->
       <div
         v-if="!connectedProject"
         class="mb-2 p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/25 backdrop-blur-md shadow-lg flex items-start gap-2.5 transition-all duration-300 select-none"
@@ -1982,15 +1983,6 @@ async function openFileWithDiff(file: {
           <p class="text-[10px] text-amber-200/80 leading-snug mt-0.5">
             Chat dengan Agen dikunci sampai Anda menetapkan folder target project kerja AI.
           </p>
-          <div class="mt-2.5">
-            <button
-              @click="isSettingsMenuOpen = true"
-              class="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/25 hover:bg-amber-500/35 border border-amber-500/40 text-amber-200 hover:text-white text-[10px] font-semibold transition-all cursor-pointer shadow-sm active:scale-[0.98]"
-            >
-              <UIcon name="i-lucide-folder-cog" class="size-3.5 text-amber-400" />
-              <span>Pilih Folder Target</span>
-            </button>
-          </div>
         </div>
       </div>
 

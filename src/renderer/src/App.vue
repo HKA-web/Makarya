@@ -17,6 +17,7 @@ import TerminalPanel from './components/TerminalPanel.vue'
 
 import { getNuxtFileIcon } from './utils/languageDetector'
 import logoImg from './assets/logo.png'
+import iconImg from './assets/icon.jpg'
 
 const workspaceStore = useWorkspaceStore()
 const settingsStore = useSettingsStore()
@@ -210,8 +211,8 @@ function handleMenuToggleCopilot(): void {
       >
         <!-- Left: Logo & Project Folder -->
         <div class="flex items-center gap-2.5" style="-webkit-app-region: no-drag;">
-          <!-- Makarya Logo (Tanpa Border Luar) -->
-          <img :src="logoImg" alt="Makarya Logo" class="h-7 w-auto object-contain drop-shadow-md select-none mr-1" />
+          <!-- Makarya Logo (Icon Only) -->
+          <img :src="iconImg" alt="Makarya Logo" class="h-7 w-auto object-contain drop-shadow-md select-none mr-1" />
 
           <!-- File Menu Button & Popup -->
           <div class="relative flex items-center">

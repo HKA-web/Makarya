@@ -6,9 +6,9 @@
   "author": "Makarya",
   "scripts": {
     "dev": "electron-vite dev",
-    "build": "vue-tsc --noEmit && electron-vite build",
+    "build": "vue-tsc --noEmit && electron-vite build && node scripts/copy-splash.js",
     "postinstall": "electron-builder install-app-deps",
-    "build:win": "npm run build && electron-builder --win --config",
+    "build:win": "npm run build && electron-builder --win --config electron-builder.yml",
     "preview": "electron-vite preview"
   },
   "dependencies": {
@@ -39,6 +39,7 @@
     "electron": "^33.4.4",
     "electron-builder": "^25.1.8",
     "electron-vite": "^2.3.0",
+    "png-to-ico": "^3.0.2",
     "postcss": "^8.5.3",
     "tailwindcss": "^4.3.3",
     "tailwindcss-primeui": "^0.4.0",

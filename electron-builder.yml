@@ -1,0 +1,40 @@
+appId: com.makarya.workspace
+productName: Makarya Code Editor
+directories:
+  output: dist
+  buildResources: build
+
+files:
+  - "!**/*"
+  - "out/**/*"
+  - "src/main/splash/**/*"
+  - "node_modules/sql.js/**"
+  - "node_modules/node-pty/**"
+
+# Skip native node-gyp rebuild because node-pty already provides prebuilt binaries
+npmRebuild: false
+
+# Unpack native binary addons from ASAR so Windows can execute them directly
+asarUnpack:
+  - "**/*.node"
+  - "**/node-pty/**"
+
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Makarya Code Editor
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico

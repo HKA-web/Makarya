@@ -7,6 +7,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { AiAgentService } from './agent/aiService'
 import { databaseService } from './db/databaseService'
 import { terminalService } from './terminal/terminalService'
+import { createSplashScreen } from './splash/splashService'
 
 let primaryWindow: BrowserWindow | null = null
 const activeBrowserWindows = new Set<BrowserWindow>()
@@ -111,7 +112,7 @@ function getPreloadPath(): string {
   return join(__dirname, '../preload/index.js')
 }
 
-function createPrimaryWindow(): BrowserWindow {
+function createPrimaryWindow(showImmediately = true): BrowserWindow {
   const win = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -121,6 +122,9 @@ function createPrimaryWindow(): BrowserWindow {
     frame: false,
     autoHideMenuBar: true,
     title: 'Makarya Code Editor',
+    icon: existsSync(join(__dirname, '../../build/icon.png'))
+      ? join(__dirname, '../../build/icon.png')
+      : join(__dirname, '../../build/icon.ico'),
     backgroundColor: '#090d14',
     webPreferences: {
       preload: getPreloadPath(),
@@ -136,7 +140,9 @@ function createPrimaryWindow(): BrowserWindow {
   }
 
   win.on('ready-to-show', () => {
-    win.show()
+    if (showImmediately) {
+      win.show()
+    }
   })
 
   win.on('closed', () => {
@@ -713,11 +719,29 @@ app.whenReady().then(async () => {
 
   registerIpcHandlers()
   terminalService.init()
-  createPrimaryWindow()
+
+  // Buka Splash Screen berdurasi 10 detik saat pertama kali aplikasi dibuka
+  let isSplashDone = false
+  const mainWin = createPrimaryWindow(false)
+
+  createSplashScreen(10000, () => {
+    isSplashDone = true
+    if (mainWin && !mainWin.isDestroyed()) {
+      mainWin.show()
+      mainWin.focus()
+    }
+  })
+
+  mainWin.once('ready-to-show', () => {
+    if (isSplashDone) {
+      mainWin.show()
+      mainWin.focus()
+    }
+  })
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createPrimaryWindow()
+      createPrimaryWindow(true)
     }
   })
 })

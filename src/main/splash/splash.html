@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>Memuat Makarya Code Editor...</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+    html, body {
+      background: transparent;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .splash-container {
+      width: 100%;
+      height: 100%;
+      position: relative;
+      border-radius: 20px;
+      overflow: hidden;
+      background: transparent;
+      box-shadow: none;
+      transition: opacity 0.35s ease, transform 0.35s ease;
+    }
+    .splash-container.fade-out {
+      opacity: 0;
+      transform: scale(0.97);
+    }
+    .splash-media {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      border-radius: 20px;
+    }
+
+    /* SVG Border Moving Line (Vue Green: #42b883) */
+    .border-moving-svg {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 10;
+    }
+    .border-beam {
+      fill: none;
+      stroke: #42b883;
+      stroke-width: 3.5;
+      stroke-linecap: round;
+      stroke-dasharray: 220 1745;
+      stroke-dashoffset: 0;
+      animation: moveBeam 3s linear infinite;
+      filter: drop-shadow(0 0 6px #42b883) drop-shadow(0 0 16px rgba(66, 184, 131, 0.9));
+    }
+    .border-beam-secondary {
+      fill: none;
+      stroke: #34d399;
+      stroke-width: 2.5;
+      stroke-linecap: round;
+      stroke-dasharray: 140 1825;
+      stroke-dashoffset: 980;
+      animation: moveBeam 3s linear infinite;
+      filter: drop-shadow(0 0 8px #34d399);
+    }
+    @keyframes moveBeam {
+      from {
+        stroke-dashoffset: 1965;
+      }
+      to {
+        stroke-dashoffset: 0;
+      }
+    }
+
+    /* Sleek Floating Status Pill */
+    .bottom-overlay {
+      position: absolute;
+      bottom: 14px;
+      left: 18px;
+      right: 18px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      pointer-events: none;
+      z-index: 5;
+    }
+    .status-pill {
+      background: rgba(9, 14, 23, 0.82);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(66, 184, 131, 0.35);
+      padding: 6px 14px;
+      border-radius: 999px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.65), 0 0 12px rgba(66, 184, 131, 0.15);
+    }
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #42b883;
+      box-shadow: 0 0 8px #42b883;
+      display: inline-block;
+      animation: blinkDot 1s infinite alternate;
+    }
+    #status-label {
+      font-size: 11.5px;
+      font-weight: 500;
+      color: #e2e8f0;
+      letter-spacing: 0.02em;
+    }
+    .progress-percent {
+      font-size: 11px;
+      font-weight: 700;
+      font-family: Consolas, monospace;
+      color: #42b883;
+      background: rgba(66, 184, 131, 0.14);
+      padding: 2px 7px;
+      border-radius: 999px;
+      border: 1px solid rgba(66, 184, 131, 0.3);
+    }
+    .version-badge {
+      font-size: 10.5px;
+      color: #94a3b8;
+      background: rgba(9, 14, 23, 0.75);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      font-weight: 500;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    }
+    @keyframes blinkDot {
+      0% { opacity: 0.4; }
+      100% { opacity: 1; }
+    }
+  </style>
+</head>
+<body>
+  <div class="splash-container" id="splash-container">
+    <img src="splash.gif" alt="Makarya Animated Splash" class="splash-media" onerror="this.src='../../build/splash.gif'" />
+
+    <!-- Vue Green Glowing Moving Border SVG -->
+    <svg class="border-moving-svg" viewBox="0 0 640 360" xmlns="http://www.w3.org/2000/svg">
+      <!-- Primary moving Vue green laser beam -->
+      <rect x="1.5" y="1.5" width="637" height="357" rx="19" class="border-beam" />
+      <!-- Secondary trailing accent beam -->
+      <rect x="1.5" y="1.5" width="637" height="357" rx="19" class="border-beam-secondary" />
+    </svg>
+
+    <!-- Sleek Floating Status Pill (No blocking bar) -->
+    <div class="bottom-overlay">
+      <div class="status-pill">
+        <span class="status-dot"></span>
+        <span id="status-label">Memulai sistem Makarya IDE...</span>
+        <span class="progress-percent" id="progress-percent">0%</span>
+      </div>
+
+      <div class="version-badge">
+        v0.1.0 • 64-bit
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const totalDuration = 10000;
+    const startTime = Date.now();
+    const progressPercent = document.getElementById('progress-percent');
+    const statusLabel = document.getElementById('status-label');
+    const splashContainer = document.getElementById('splash-container');
+
+    const stages = [
+      { at: 0.00, text: 'Memulai sistem Makarya IDE...' },
+      { at: 0.15, text: 'Menginisialisasi Monaco Code Engine...' },
+      { at: 0.35, text: 'Mempersiapkan Terminal ConPTY...' },
+      { at: 0.55, text: 'Menghubungkan Database SQLite & AI Copilot...' },
+      { at: 0.78, text: 'Menyiapkan ruang kerja & editor...' },
+      { at: 0.95, text: 'Sistem siap, membuka editor...' }
+    ];
+
+    const timer = setInterval(() => {
+      const elapsed = Date.now() - startTime;
+      const progress = Math.min(1, elapsed / totalDuration);
+      const percentInt = Math.floor(progress * 100);
+
+      progressPercent.textContent = percentInt + '%';
+
+      for (let i = stages.length - 1; i >= 0; i--) {
+        if (progress >= stages[i].at) {
+          statusLabel.textContent = stages[i].text;
+          break;
+        }
+      }
+
+      if (progress >= 1) {
+        clearInterval(timer);
+        splashContainer.classList.add('fade-out');
+      }
+    }, 40);
+  </script>
+</body>
+</html>

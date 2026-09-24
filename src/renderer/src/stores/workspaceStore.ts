@@ -252,6 +252,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const isCommandPaletteVisible = ref<boolean>(false)
   const isQuickOpenVisible = ref<boolean>(false)
   const isWindowSwitcherVisible = ref<boolean>(false)
+  const isTabSwitcherVisible = ref<boolean>(false)
+  const mruTabIds = ref<string[]>(['tab-welcome'])
   const registeredApps = ref<RegisteredApp[]>([])
   const activeWindows = ref<Array<{ id: number; title: string; isFocused: boolean }>>([])
   const recentFiles = ref<Array<{ name: string; path: string }>>([])
@@ -615,6 +617,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 
     tabList.value.push(newTab)
     activeTabId.value = newTab.id
+    updateMru(newTab.id)
   }
 
   // Update tab content on typing in Monaco
@@ -652,6 +655,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     if (targetIndex === -1) return
 
     tabList.value.splice(targetIndex, 1)
+    mruTabIds.value = mruTabIds.value.filter((id) => id !== targetTabId)
 
     if (activeTabId.value === targetTabId) {
       if (tabList.value.length > 0) {
