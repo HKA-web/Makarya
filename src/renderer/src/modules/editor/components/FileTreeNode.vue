@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import type { FileEntry } from '../../../preload/index'
-import { getNuxtFileIcon } from '../utils/languageDetector'
-import { useWorkspaceStore } from '../stores/workspaceStore'
+import { getNuxtFileIcon } from '@renderer/utils/languageDetector'
+import { useWorkspaceStore } from '@renderer/stores/workspaceStore'
 
 const props = defineProps<{
   entry: FileEntry

@@ -53,6 +53,8 @@ export interface ElectronAPI {
   closeWindow: () => Promise<void>
   isWindowMaximized: () => Promise<boolean>
   openNewWindow: () => Promise<{ success: boolean; windowId?: number }>
+  openBlankAppWindow: (destroyCurrent?: boolean) => Promise<{ success: boolean; windowId?: number }>
+  openEditorWindow: (destroyCurrent?: boolean) => Promise<{ success: boolean; windowId?: number }>
   listWindows: () => Promise<Array<{ id: number; title: string; isFocused: boolean }>>
   focusWindow: (windowId: number) => Promise<{ success: boolean }>
   pickExeFile: () => Promise<{ canceled: boolean; filePath?: string; fileName?: string; error?: string }>

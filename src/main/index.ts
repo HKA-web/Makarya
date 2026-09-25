@@ -5,6 +5,7 @@ import { readdir, readFile, writeFile, stat, mkdir, rename, rm, cp } from 'node:
 import { spawn } from 'node:child_process'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { AiAgentService } from './agent/aiService'
+import { uiBuilderService } from './agent/uiBuilderService'
 import { databaseService } from './db/databaseService'
 import { terminalService } from './terminal/terminalService'
 import { createSplashScreen } from './splash/splashService'
@@ -112,7 +113,18 @@ function getPreloadPath(): string {
   return join(__dirname, '../preload/index.js')
 }
 
-function createPrimaryWindow(showImmediately = true): BrowserWindow {
+function createPrimaryWindow(
+  optionsOrShowImmediately: boolean | { showImmediately?: boolean; mode?: 'editor' | 'blank-app' } = true
+): BrowserWindow {
+  const showImmediately =
+    typeof optionsOrShowImmediately === 'boolean'
+      ? optionsOrShowImmediately
+      : optionsOrShowImmediately.showImmediately ?? true
+  const mode =
+    typeof optionsOrShowImmediately === 'object' && optionsOrShowImmediately.mode
+      ? optionsOrShowImmediately.mode
+      : 'editor'
+
   const win = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -121,7 +133,7 @@ function createPrimaryWindow(showImmediately = true): BrowserWindow {
     show: false,
     frame: false,
     autoHideMenuBar: true,
-    title: 'Makarya Code Editor',
+    title: mode === 'blank-app' ? 'Makarya App Workspace' : 'Makarya Code Editor',
     icon: existsSync(join(__dirname, '../../build/icon.png'))
       ? join(__dirname, '../../build/icon.png')
       : join(__dirname, '../../build/icon.ico'),
@@ -165,10 +177,13 @@ function createPrimaryWindow(showImmediately = true): BrowserWindow {
     return { action: 'deny' }
   })
 
+  const queryParams = mode === 'blank-app' ? '?mode=blank-app' : ''
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    win.loadURL(process.env['ELECTRON_RENDERER_URL'])
+    win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}${queryParams}`)
   } else {
-    win.loadFile(join(__dirname, '../renderer/index.html'))
+    win.loadFile(join(__dirname, '../renderer/index.html'), {
+      query: mode === 'blank-app' ? { mode: 'blank-app' } : undefined
+    })
   }
 
   return win
@@ -252,6 +267,24 @@ function registerIpcHandlers(): void {
   // Multi-Window & Process Management (Task View)
   ipcMain.handle('window:open-new-window', async () => {
     const newWin = createPrimaryWindow()
+    return { success: true, windowId: newWin.id }
+  })
+
+  ipcMain.handle('window:open-blank-app', async (event, destroyCurrent = true) => {
+    const currentWin = BrowserWindow.fromWebContents(event.sender)
+    const newWin = createPrimaryWindow({ showImmediately: true, mode: 'blank-app' })
+    if (destroyCurrent && currentWin && !currentWin.isDestroyed()) {
+      currentWin.close()
+    }
+    return { success: true, windowId: newWin.id }
+  })
+
+  ipcMain.handle('window:open-editor-mode', async (event, destroyCurrent = false) => {
+    const currentWin = BrowserWindow.fromWebContents(event.sender)
+    const newWin = createPrimaryWindow({ showImmediately: true, mode: 'editor' })
+    if (destroyCurrent && currentWin && !currentWin.isDestroyed()) {
+      currentWin.close()
+    }
     return { success: true, windowId: newWin.id }
   })
 
@@ -610,6 +643,23 @@ function registerIpcHandlers(): void {
       console.error('[Main] Stream chat unhandled error:', streamError)
     })
     return { accepted: true }
+  })
+
+  // UI Builder Streaming Generation (9router & Multimodal)
+  ipcMain.handle('ui-builder:chat-stream', async (event, requestPayload) => {
+    const windowTarget = BrowserWindow.fromWebContents(event.sender) || primaryWindow
+    uiBuilderService
+      .streamGeneration(requestPayload, aiAgentService.getConfiguration(), windowTarget)
+      .catch((err) => {
+        console.error('[Main] UI Builder stream error:', err)
+      })
+    return { accepted: true }
+  })
+
+  // UI Builder Abort
+  ipcMain.handle('ui-builder:chat-abort', async (_event, requestId: string) => {
+    const isAborted = uiBuilderService.abortStream(requestId)
+    return { aborted: isAborted }
   })
 
   // AI Agent Abort

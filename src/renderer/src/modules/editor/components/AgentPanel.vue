@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { ref, watch, nextTick, onMounted, onUnmounted, computed } from 'vue'
 import { useToast } from 'primevue/usetoast'
-import { useWorkspaceStore } from '../stores/workspaceStore'
-import { useAgentStore, type AgentToolCallItem } from '../stores/agentStore'
-import { useSettingsStore } from '../stores/settingsStore'
-import { parseMarkdownBlocks, formatInlineMarkdown } from '../utils/markdownParser'
-import { getNuxtFileIcon, detectMonacoLanguage } from '../utils/languageDetector'
-import logoImg from '../assets/logo.png'
-import iconImg from '../assets/icon.png'
+import { useWorkspaceStore } from '@renderer/stores/workspaceStore'
+import { useAgentStore, type AgentToolCallItem } from '@renderer/stores/agentStore'
+import { useSettingsStore } from '@renderer/stores/settingsStore'
+import { parseMarkdownBlocks, formatInlineMarkdown } from '@renderer/utils/markdownParser'
+import { getNuxtFileIcon, detectMonacoLanguage } from '@renderer/utils/languageDetector'
+import logoImg from '@renderer/assets/logo.png'
+import iconImg from '@renderer/assets/icon.jpg'
 
 const workspaceStore = useWorkspaceStore()
 const agentStore = useAgentStore()
@@ -1367,27 +1367,31 @@ async function openFileWithDiff(file: {
     </div>
 
     <!-- Chat Messages Scroll Area (Compact) -->
-    <div ref="messagesContainerRef" class="flex-1 overflow-y-auto p-3 text-[11px] relative">
+    <div ref="messagesContainerRef" class="flex-1 overflow-y-auto p-3 text-[11px] relative flex flex-col">
       <!-- DEFAULT HERO STATE (Gambar 2 Style, shown when messages.length === 0) -->
       <div
         v-if="agentStore.messages.length === 0"
-        class="min-h-full flex flex-col items-center justify-center py-6 px-2 text-center select-none"
+        class="my-auto flex flex-col items-center justify-center py-6 px-2 text-center select-none w-full"
       >
         <!-- Glow Logo Card (Gambar 2) -->
-        <div class="relative group mb-4">
+        <div class="relative group mb-4 mx-auto flex items-center justify-center">
           <div class="absolute -inset-1.5 bg-gradient-to-r from-[#42b883]/30 via-[#34d399]/20 to-[#42b883]/30 rounded-3xl blur-md opacity-75 group-hover:opacity-100 transition duration-500"></div>
-          <div class="relative w-20 h-20 sm:w-22 sm:h-22 rounded-2xl bg-[#0c121d] border border-[#42b883]/35 shadow-xl shadow-[#42b883]/15 flex items-center justify-center p-3.5">
-            <img :src="iconImg" alt="Makarya" class="w-full h-full object-contain filter drop-shadow-[0_0_10px_rgba(66,184,131,0.6)]" />
+          <div class="relative w-20 h-20 sm:w-22 sm:h-22 rounded-2xl bg-[#0c121d] border border-[#42b883]/35 shadow-xl shadow-[#42b883]/15 flex items-center justify-center p-3 overflow-hidden">
+            <img
+              :src="iconImg"
+              alt="Makarya"
+              class="w-full h-full object-contain filter drop-shadow-[0_0_10px_rgba(66,184,131,0.6)] translate-x-1.5 translate-y-0.5"
+            />
           </div>
         </div>
 
         <!-- Title -->
-        <h2 class="text-base sm:text-lg font-bold tracking-tight text-white mb-1.5 flex items-center justify-center gap-1.5">
+        <h2 class="text-base sm:text-lg font-bold tracking-tight text-white mb-1.5 flex items-center justify-center gap-1.5 text-center w-full">
           <span class="vue-gradient-text">Makarya AI Agent</span>
         </h2>
 
         <!-- Subtitle -->
-        <p class="text-[11px] text-slate-400 text-center max-w-[270px] leading-relaxed mb-4">
+        <p class="text-[11px] text-slate-400 text-center max-w-[270px] mx-auto leading-relaxed mb-4">
           Asisten coding cerdas terintegrasi. Sambungkan agen ke folder project kerja agar pemindaian berkas dan aksi agen terkunci cepat di dalam folder tersebut.
         </p>
 

@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 import Dialog from 'primevue/dialog'
-import { useWorkspaceStore } from '../stores/workspaceStore'
-import { useAgentStore } from '../stores/agentStore'
+import { useWorkspaceStore } from '@renderer/stores/workspaceStore'
+import { useAgentStore } from '@renderer/stores/agentStore'
 
 const workspaceStore = useWorkspaceStore()
 const agentStore = useAgentStore()
@@ -268,21 +268,6 @@ function scrollToSelected(): void {
     el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
   })
 }
-
-function handleGlobalKeydown(event: KeyboardEvent): void {
-  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
-    event.preventDefault()
-    workspaceStore.toggleCommandPalette()
-  }
-}
-
-onMounted(() => {
-  window.addEventListener('keydown', handleGlobalKeydown)
-})
-
-onUnmounted(() => {
-  window.removeEventListener('keydown', handleGlobalKeydown)
-})
 </script>
 
 <template>
@@ -405,4 +390,3 @@ onUnmounted(() => {
     </div>
   </Dialog>
 </template>
-

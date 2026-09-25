@@ -7,9 +7,9 @@ import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 import type { FileEntry } from '../../../preload/index'
 import FileTreeNode from './FileTreeNode.vue'
-import { useWorkspaceStore } from '../stores/workspaceStore'
-import { useAgentStore } from '../stores/agentStore'
-import { getFileIconClass } from '../utils/languageDetector'
+import { useWorkspaceStore } from '@renderer/stores/workspaceStore'
+import { useAgentStore } from '@renderer/stores/agentStore'
+import { getFileIconClass } from '@renderer/utils/languageDetector'
 
 const workspaceStore = useWorkspaceStore()
 const agentStore = useAgentStore()

@@ -969,6 +969,16 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return target?.viewState
   }
 
+  const isAboutModalOpen = ref(false)
+
+  function toggleAboutModal(): void {
+    isAboutModalOpen.value = !isAboutModalOpen.value
+  }
+
+  function openAboutModal(): void {
+    isAboutModalOpen.value = true
+  }
+
   function toggleCommandPalette(): void {
     isCommandPaletteVisible.value = !isCommandPaletteVisible.value
   }
@@ -1058,6 +1068,9 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     setActiveTab,
     saveActiveTabViewState,
     getTabViewState,
+    isAboutModalOpen,
+    toggleAboutModal,
+    openAboutModal,
     toggleCommandPalette,
     toggleCopilotPanel,
     toggleSidebar,

@@ -2,8 +2,8 @@
 import { ref } from 'vue'
 import Dialog from 'primevue/dialog'
 import { useToast } from 'primevue/usetoast'
-import { useSettingsStore } from '../stores/settingsStore'
-import { useAgentStore } from '../stores/agentStore'
+import { useSettingsStore } from '@renderer/stores/settingsStore'
+import { useAgentStore } from '@renderer/stores/agentStore'
 
 const settingsStore = useSettingsStore()
 const agentStore = useAgentStore()

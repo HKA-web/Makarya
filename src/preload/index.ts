@@ -27,6 +27,10 @@ const makaryaAPI = {
   closeWindow: (): Promise<void> => ipcRenderer.invoke('window:close'),
   isWindowMaximized: (): Promise<boolean> => ipcRenderer.invoke('window:is-maximized'),
   openNewWindow: (): Promise<{ success: boolean; windowId?: number }> => ipcRenderer.invoke('window:open-new-window'),
+  openBlankAppWindow: (destroyCurrent: boolean = true): Promise<{ success: boolean; windowId?: number }> =>
+    ipcRenderer.invoke('window:open-blank-app', destroyCurrent),
+  openEditorWindow: (destroyCurrent: boolean = false): Promise<{ success: boolean; windowId?: number }> =>
+    ipcRenderer.invoke('window:open-editor-mode', destroyCurrent),
   listWindows: (): Promise<Array<{ id: number; title: string; isFocused: boolean }>> => ipcRenderer.invoke('window:list-all'),
   focusWindow: (windowId: number): Promise<{ success: boolean }> => ipcRenderer.invoke('window:focus-window', windowId),
   pickExeFile: (): Promise<{ canceled: boolean; filePath?: string; fileName?: string; error?: string }> => ipcRenderer.invoke('app:pick-exe'),
@@ -149,6 +153,48 @@ const makaryaAPI = {
     ipcRenderer.on('agent:stream-error', listener)
     return (): void => {
       ipcRenderer.removeListener('agent:stream-error', listener)
+    }
+  },
+
+  // UI Builder Multimodal IPC
+  sendUiBuilderChat: (payload: {
+    requestId: string
+    model?: string
+    messages: Array<{
+      role: 'system' | 'user' | 'assistant'
+      content: string | Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }>
+    }>
+    temperature?: number
+  }): Promise<{ accepted: boolean }> =>
+    ipcRenderer.invoke('ui-builder:chat-stream', payload),
+  abortUiBuilderChat: (requestId: string): Promise<{ aborted: boolean }> =>
+    ipcRenderer.invoke('ui-builder:chat-abort', requestId),
+  onUiBuilderStreamToken: (callback: (data: { requestId: string; deltaContent: string }) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, data: { requestId: string; deltaContent: string }): void => callback(data)
+    ipcRenderer.on('ui-builder:stream-token', listener)
+    return (): void => {
+      ipcRenderer.removeListener('ui-builder:stream-token', listener)
+    }
+  },
+  onUiBuilderThought: (callback: (data: { requestId: string; deltaThought: string }) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, data: { requestId: string; deltaThought: string }): void => callback(data)
+    ipcRenderer.on('ui-builder:thought-token', listener)
+    return (): void => {
+      ipcRenderer.removeListener('ui-builder:thought-token', listener)
+    }
+  },
+  onUiBuilderStreamDone: (callback: (data: { requestId: string; fullContent?: string; isAborted?: boolean }) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, data: { requestId: string; fullContent?: string; isAborted?: boolean }): void => callback(data)
+    ipcRenderer.on('ui-builder:stream-done', listener)
+    return (): void => {
+      ipcRenderer.removeListener('ui-builder:stream-done', listener)
+    }
+  },
+  onUiBuilderStreamError: (callback: (data: { requestId: string; errorMessage: string }) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, data: { requestId: string; errorMessage: string }): void => callback(data)
+    ipcRenderer.on('ui-builder:stream-error', listener)
+    return (): void => {
+      ipcRenderer.removeListener('ui-builder:stream-error', listener)
     }
   },
 

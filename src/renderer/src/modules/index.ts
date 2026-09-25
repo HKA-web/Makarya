@@ -1,0 +1,6 @@
+export * from './core/types'
+export * from './core/context'
+export * from './core/registry'
+export { default as ModuleErrorBoundary } from './core/ModuleErrorBoundary.vue'
+export { default as ModularAppContainer } from './ModularAppContainer.vue'
+export { default as BlankAppContainer } from './ModularAppContainer.vue'

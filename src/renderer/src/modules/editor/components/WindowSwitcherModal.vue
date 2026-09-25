@@ -2,7 +2,7 @@
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import Dialog from 'primevue/dialog'
 import { useToast } from 'primevue/usetoast'
-import { useWorkspaceStore, type RegisteredApp } from '../stores/workspaceStore'
+import { useWorkspaceStore, type RegisteredApp } from '@renderer/stores/workspaceStore'
 
 const workspaceStore = useWorkspaceStore()
 const toast = useToast()

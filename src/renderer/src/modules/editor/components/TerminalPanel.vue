@@ -3,7 +3,7 @@ import { ref, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
-import { useWorkspaceStore } from '../stores/workspaceStore'
+import { useWorkspaceStore } from '@renderer/stores/workspaceStore'
 
 const workspaceStore = useWorkspaceStore()
 

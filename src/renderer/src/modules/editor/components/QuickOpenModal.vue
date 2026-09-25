@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from 'vue'
 import Dialog from 'primevue/dialog'
-import { useWorkspaceStore } from '../stores/workspaceStore'
-import { getNuxtFileIcon } from '../utils/languageDetector'
+import { useWorkspaceStore } from '@renderer/stores/workspaceStore'
+import { getNuxtFileIcon } from '@renderer/utils/languageDetector'
 
 const workspaceStore = useWorkspaceStore()
 

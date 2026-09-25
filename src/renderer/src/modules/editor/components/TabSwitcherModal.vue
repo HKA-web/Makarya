@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
-import { useWorkspaceStore } from '../stores/workspaceStore'
-import { getNuxtFileIcon } from '../utils/languageDetector'
+import { useWorkspaceStore } from '@renderer/stores/workspaceStore'
+import { getNuxtFileIcon } from '@renderer/utils/languageDetector'
 
 const workspaceStore = useWorkspaceStore()
 
@@ -295,7 +295,6 @@ onUnmounted(() => {
   }
   to {
     transform: scale(1);
-    opacity: 1;
   }
 }
 

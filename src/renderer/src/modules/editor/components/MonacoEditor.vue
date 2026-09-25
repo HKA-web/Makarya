@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, onBeforeUnmount, watch, computed, nextTick } from 'vue'
 import * as monaco from 'monaco-editor'
-import { useWorkspaceStore } from '../stores/workspaceStore'
-import { useAgentStore } from '../stores/agentStore'
-import { useSettingsStore } from '../stores/settingsStore'
-import { computeInlineDiff, InlineDiffResult } from '../utils/diffEngine'
+import { useWorkspaceStore } from '@renderer/stores/workspaceStore'
+import { useAgentStore } from '@renderer/stores/agentStore'
+import { useSettingsStore } from '@renderer/stores/settingsStore'
+import { computeInlineDiff, InlineDiffResult } from '@renderer/utils/diffEngine'
 
 const props = withDefaults(
   defineProps<{
