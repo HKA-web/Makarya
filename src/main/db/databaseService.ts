@@ -303,23 +303,27 @@ export class DatabaseService {
     projectRoot?: string
   }): boolean {
     if (!this.db) return false
+    const nowIso = new Date().toISOString()
     try {
       this.db.run(
         `INSERT INTO chat_sessions (id, title, model, project_root, created_at, updated_at)
-         VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+         VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            title = COALESCE(?, title),
            model = COALESCE(?, model),
            project_root = COALESCE(?, project_root),
-           updated_at = CURRENT_TIMESTAMP`,
+           updated_at = ?`,
         [
           session.id,
           session.title || 'Obrolan Baru',
           session.model || null,
           session.projectRoot || null,
+          nowIso,
+          nowIso,
           session.title || null,
           session.model || null,
-          session.projectRoot || null
+          session.projectRoot || null,
+          nowIso
         ]
       )
       this.queueSave()
@@ -357,19 +361,23 @@ export class DatabaseService {
   }): boolean {
     if (!this.db) return false
     const sessionId = msg.sessionId || 'default'
+    const nowIso = new Date().toISOString()
     try {
       // 1. Ensure master session exists or update timestamp
       this.db.run(
         `INSERT INTO chat_sessions (id, title, model, project_root, created_at, updated_at)
-         VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+         VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
-           updated_at = CURRENT_TIMESTAMP,
+           updated_at = ?,
            model = COALESCE(?, model)`,
         [
           sessionId,
           msg.role === 'user' && msg.content ? msg.content.slice(0, 45).replace(/[\r\n]+/g, ' ') : 'Obrolan AI',
           msg.model || null,
           msg.projectRoot || null,
+          nowIso,
+          nowIso,
+          nowIso,
           msg.model || null
         ]
       )
@@ -377,7 +385,7 @@ export class DatabaseService {
       // 2. Insert chat message detail
       this.db.run(
         `INSERT OR REPLACE INTO chat_messages (id, session_id, role, content, thoughts, attached_files, images, model, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           msg.id,
           sessionId,
@@ -386,7 +394,8 @@ export class DatabaseService {
           msg.thoughts || null,
           msg.attachedFiles ? JSON.stringify(msg.attachedFiles) : null,
           msg.images ? JSON.stringify(msg.images) : null,
-          msg.model || null
+          msg.model || null,
+          nowIso
         ]
       )
       this.queueSave()

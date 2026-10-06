@@ -31,20 +31,6 @@ const emit = defineEmits<{
         </p>
       </div>
 
-      <!-- Info Box -->
-      <div class="p-4 rounded-2xl bg-[#0b101b] border border-white/[0.08] text-left space-y-2.5">
-        <div class="flex items-center justify-between">
-          <span class="text-xs font-bold text-white flex items-center gap-1.5">
-            <UIcon name="i-lucide-info" class="size-4 text-[#42b883]" />
-            <span>Mulai Tambahkan Fitur Baru</span>
-          </span>
-        </div>
-
-        <p class="text-[11px] text-slate-400 leading-relaxed">
-          Anda dapat menambahkan dan mengelola berbagai macam fitur melalui menu Manajer Modul. Setiap fitur yang terpasang dapat diaktifkan atau dinonaktifkan dengan mudah.
-        </p>
-      </div>
-
       <!-- Action Button -->
       <div class="flex items-center justify-center gap-3 pt-2">
         <button

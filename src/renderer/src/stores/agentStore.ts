@@ -2,6 +2,7 @@ import { ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { useWorkspaceStore } from './workspaceStore'
 import { useSettingsStore } from './settingsStore'
+import { usePluginStore } from './pluginStore'
 
 export interface AgentToolCallItem {
   id: string
@@ -276,7 +277,7 @@ export const useAgentStore = defineStore('agentStore', () => {
           attachedFiles: item.attachedFiles,
           images: item.images,
           timestamp: item.timestamp
-            ? new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            ? settingsStore.formatTimestamp(item.timestamp)
             : 'Tersimpan'
         }))
       } catch (err) {
@@ -314,7 +315,7 @@ export const useAgentStore = defineStore('agentStore', () => {
           attachedFiles: item.attachedFiles,
           images: item.images,
           timestamp: item.timestamp
-            ? new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            ? settingsStore.formatTimestamp(item.timestamp)
             : 'Tersimpan'
         }))
       }
@@ -388,7 +389,23 @@ export const useAgentStore = defineStore('agentStore', () => {
       const targetMessage = messages.value.find((msg) => msg.id === data.requestId)
       if (targetMessage) {
         if (!targetMessage.toolCalls) targetMessage.toolCalls = []
-        targetMessage.activeAction = `Menjalankan ${data.toolName}...`
+        
+        // Detailed user-friendly activeAction label (Antigravity style)
+        if (data.toolName === 'read_file') {
+          targetMessage.activeAction = `Membaca berkas: ${data.args?.filePath || ''}...`
+        } else if (data.toolName === 'write_file') {
+          targetMessage.activeAction = `Menulis berkas: ${data.args?.filePath || ''}...`
+        } else if (data.toolName === 'execute_command') {
+          targetMessage.activeAction = `Menjalankan terminal: $ ${data.args?.command || ''}...`
+        } else if (data.toolName === 'list_dir') {
+          targetMessage.activeAction = `Memindai folder: ${data.args?.dirPath || 'root'}...`
+        } else if (data.toolName === 'db_execute_query') {
+          targetMessage.activeAction = `Mengeksekusi kueri database...`
+        } else if (data.toolName === 'db_inspect_schema') {
+          targetMessage.activeAction = `Memeriksa skema database...`
+        } else {
+          targetMessage.activeAction = `Menjalankan ${data.toolName}...`
+        }
 
         const existingTool = targetMessage.toolCalls.find((tc) => tc.id === data.toolCallId)
         if (!existingTool) {
@@ -423,12 +440,40 @@ export const useAgentStore = defineStore('agentStore', () => {
       }
     })
 
+    // 3c. Dynamic Tool Execution from Plugins
+    if (window.makaryaAPI?.onAgentExecuteCustomTool) {
+      window.makaryaAPI.onAgentExecuteCustomTool(async (data) => {
+        const pluginStore = usePluginStore()
+        const tool = pluginStore.customAiTools.get(data.toolName)
+        if (tool && tool.execute) {
+          try {
+            const rawResult = await Promise.resolve(tool.execute(data.args))
+            const cleanResult =
+              rawResult !== undefined
+                ? JSON.parse(JSON.stringify(rawResult))
+                : { status: 'success' }
+            await window.makaryaAPI.respondCustomTool(data.toolCallId, cleanResult)
+          } catch (err: any) {
+            await window.makaryaAPI.respondCustomTool(data.toolCallId, {
+              status: 'error',
+              message: err?.message || String(err)
+            })
+          }
+        } else {
+          await window.makaryaAPI.respondCustomTool(data.toolCallId, {
+            status: 'error',
+            message: `Tool "${data.toolName}" tidak ditemukan di plugin aktif.`
+          })
+        }
+      })
+    }
+
     // 4. Tool Execution Finished
     cleanupToolFinishListener = window.makaryaAPI.onAgentToolFinish?.((data) => {
       if (data.requestId !== activeRequestId.value) return
       const targetMessage = messages.value.find((msg) => msg.id === data.requestId)
       if (targetMessage) {
-        targetMessage.activeAction = 'Menganalisis hasil...'
+        targetMessage.activeAction = 'Working...'
         if (targetMessage.toolCalls) {
           const targetTool = targetMessage.toolCalls.find((tc) => tc.id === data.toolCallId)
           if (targetTool) {
@@ -447,33 +492,46 @@ export const useAgentStore = defineStore('agentStore', () => {
           }
         }
       }
+
+      // Auto-refresh file tree if a file modification or command execution tool finished
+      if (['write_file', 'create_file', 'delete_file', 'rename_file', 'execute_command'].includes(data.toolName)) {
+        const workspaceStore = useWorkspaceStore()
+        workspaceStore.refreshFileTree().catch?.(() => {})
+      }
     })
 
     // 5. File Modified Notification
     cleanupFileModifiedListener = window.makaryaAPI.onAgentFileModified?.((data) => {
-      const normPath = data.filePath.replace(/\\/g, '/').toLowerCase()
-      const existingIdx = sessionModifiedFiles.value.findIndex(
-        (f) => f.filePath.replace(/\\/g, '/').toLowerCase() === normPath
-      )
-      if (existingIdx >= 0) {
-        sessionModifiedFiles.value[existingIdx].additions += data.additions
-        sessionModifiedFiles.value[existingIdx].deletions += data.deletions
-        if (data.newContent !== undefined) sessionModifiedFiles.value[existingIdx].newContent = data.newContent
-        if (data.originalContent !== undefined && !sessionModifiedFiles.value[existingIdx].originalContent) {
-          sessionModifiedFiles.value[existingIdx].originalContent = data.originalContent
+      const workspaceStore = useWorkspaceStore()
+      const settingsStore = useSettingsStore()
+      const isAutoApply = settingsStore.ai.reviewPolicy === 'auto_apply'
+
+      // Only show in the bottom review drawer with Accept/Reject buttons if reviewPolicy is NOT auto_apply
+      if (!isAutoApply) {
+        const normPath = data.filePath.replace(/\\/g, '/').toLowerCase()
+        const existingIdx = sessionModifiedFiles.value.findIndex(
+          (f) => f.filePath.replace(/\\/g, '/').toLowerCase() === normPath
+        )
+        if (existingIdx >= 0) {
+          sessionModifiedFiles.value[existingIdx].additions += data.additions
+          sessionModifiedFiles.value[existingIdx].deletions += data.deletions
+          if (data.newContent !== undefined) sessionModifiedFiles.value[existingIdx].newContent = data.newContent
+          if (data.originalContent !== undefined && !sessionModifiedFiles.value[existingIdx].originalContent) {
+            sessionModifiedFiles.value[existingIdx].originalContent = data.originalContent
+          }
+        } else {
+          sessionModifiedFiles.value.push({
+            filePath: data.filePath,
+            fileName: data.fileName,
+            additions: data.additions,
+            deletions: data.deletions,
+            originalContent: data.originalContent,
+            newContent: data.newContent
+          })
         }
-      } else {
-        sessionModifiedFiles.value.push({
-          filePath: data.filePath,
-          fileName: data.fileName,
-          additions: data.additions,
-          deletions: data.deletions,
-          originalContent: data.originalContent,
-          newContent: data.newContent
-        })
       }
 
-      // Also attach to active assistant message if present
+      // Also attach to active assistant message if present so user can see what files were modified in chat info
       if (activeRequestId.value) {
         const targetMessage = messages.value.find((msg) => msg.id === activeRequestId.value)
         if (targetMessage) {
@@ -499,15 +557,9 @@ export const useAgentStore = defineStore('agentStore', () => {
         }
       }
 
-      // Register pending diff in workspaceStore and auto-focus the file tab based on Review Policy
-      const workspaceStore = useWorkspaceStore()
-      const settingsStore = useSettingsStore()
+      // Register pending diff or auto-focus file based on Review Policy
       if (data.originalContent !== undefined && data.newContent !== undefined) {
-        if (settingsStore.ai.reviewPolicy === 'auto_apply') {
-          // Auto apply policy: save directly to disk and update active editor without diff review
-          if (window.makaryaAPI?.writeFile) {
-            window.makaryaAPI.writeFile(data.filePath, data.newContent)
-          }
+        if (isAutoApply) {
           workspaceStore.clearPendingDiff(data.filePath)
           workspaceStore.openFile(data.filePath, data.fileName)
         } else {
@@ -515,6 +567,9 @@ export const useAgentStore = defineStore('agentStore', () => {
           workspaceStore.openFile(data.filePath, data.fileName)
         }
       }
+
+      // Auto-refresh file tree so new file shows in Explorer without manual refresh
+      workspaceStore.refreshFileTree().catch?.(() => {})
     })
 
     // 6. Stream Completed
@@ -530,13 +585,15 @@ export const useAgentStore = defineStore('agentStore', () => {
           targetMessage.isStreaming = false
           targetMessage.isThinking = false
           targetMessage.activeAction = undefined
-          targetMessage.timestamp = data.isAborted ? 'Dibatalkan' : 'Selesai'
+          targetMessage.timestamp = data.isAborted ? 'Dibatalkan' : settingsStore.formatTimestamp(new Date())
           if (data.fullContent && !targetMessage.content) {
             targetMessage.content = data.fullContent
           }
           persistMessageToDb(targetMessage)
         }
         loadSessions().catch?.(() => {})
+        const workspaceStore = useWorkspaceStore()
+        workspaceStore.refreshFileTree().catch?.(() => {})
       } catch (err) {
         console.warn('Error handling stream completion:', err)
       }
@@ -677,7 +734,7 @@ export const useAgentStore = defineStore('agentStore', () => {
             selectedSnippet: f.selectedSnippet
           }))
         : undefined,
-      timestamp: 'Sekarang'
+      timestamp: settingsStore.formatTimestamp(new Date())
     }
     messages.value.push(userMessage)
 
@@ -805,12 +862,24 @@ export const useAgentStore = defineStore('agentStore', () => {
 
     try {
       const settingsStore = useSettingsStore()
+      const pluginStore = usePluginStore()
+      const activeCustomTools = pluginStore.activeAITools.map((t) => ({
+        name: String(t.name || ''),
+        description: String(t.description || ''),
+        parameters: t.parameters ? JSON.parse(JSON.stringify(t.parameters)) : undefined,
+        pluginId: t.pluginId ? String(t.pluginId) : undefined
+      }))
+
+      const cleanPayloadMessages = JSON.parse(JSON.stringify(payloadMessages))
+
       await window.makaryaAPI.sendChatMessage({
         requestId: assistantRequestId,
         model: selectedModel.value,
-        messages: payloadMessages,
-        projectRoot: effectiveRoot,
-        autoExecution: settingsStore.ai.autoExecution
+        messages: cleanPayloadMessages,
+        projectRoot: effectiveRoot || undefined,
+        autoExecution: settingsStore.ai.autoExecution,
+        reviewPolicy: settingsStore.ai.reviewPolicy,
+        customTools: activeCustomTools
       })
     } catch (sendError: any) {
       console.error('Error invoking sendChatMessage:', sendError)
@@ -867,6 +936,58 @@ export const useAgentStore = defineStore('agentStore', () => {
     createNewSession()
   }
 
+  async function revertAndResendMessage(
+    messageId: string,
+    activeFileContext?: ActiveFileContext,
+    projectRoot?: string
+  ): Promise<void> {
+    const msgIdx = messages.value.findIndex((m) => m.id === messageId)
+    if (msgIdx === -1) return
+
+    const targetUserMsg = messages.value[msgIdx]
+    if (targetUserMsg.role !== 'user') return
+
+    // 1. Revert any file modifications from subsequent messages
+    const subsequentMessages = messages.value.slice(msgIdx)
+    const workspaceStore = useWorkspaceStore()
+
+    for (const msg of subsequentMessages) {
+      if (msg.modifiedFiles && msg.modifiedFiles.length > 0) {
+        for (const file of msg.modifiedFiles) {
+          if (file.originalContent !== undefined && window.makaryaAPI?.writeFile) {
+            try {
+              await window.makaryaAPI.writeFile(file.filePath, file.originalContent)
+              workspaceStore.clearPendingDiff(file.filePath)
+              const tab = workspaceStore.tabList.find((t) => t.filePath && t.filePath.replace(/\\/g, '/').toLowerCase() === file.filePath.replace(/\\/g, '/').toLowerCase())
+              if (tab) {
+                tab.content = file.originalContent
+                tab.savedContent = file.originalContent
+                tab.isDirty = false
+              }
+            } catch (err) {
+              console.warn(`Gagal mengembalikan berkas ${file.filePath}:`, err)
+            }
+          }
+          removeModifiedFile(file.filePath)
+        }
+      }
+    }
+
+    // Also reject any active pending diffs
+    await rejectAllChanges()
+
+    // 2. Remove all messages from msgIdx onward in current view
+    messages.value.splice(msgIdx)
+
+    // Save prompt and attachments to resend
+    const promptText = targetUserMsg.content
+    const images = targetUserMsg.images ? [...targetUserMsg.images] : undefined
+    const attachedFiles = targetUserMsg.attachedFiles ? [...targetUserMsg.attachedFiles] : undefined
+
+    // 3. Re-send message freshly
+    await sendMessage(promptText, activeFileContext, projectRoot, images, attachedFiles as any)
+  }
+
   async function approveToolCall(toolCallId: string, approved: boolean): Promise<void> {
     if (window.makaryaAPI?.respondToolApproval) {
       await window.makaryaAPI.respondToolApproval(toolCallId, approved)
@@ -896,6 +1017,7 @@ export const useAgentStore = defineStore('agentStore', () => {
     isGenerating,
     activeRequestId,
     selectedModel,
+    setSelectedModel,
     availableModels,
     includeActiveFileContext,
     sessionModifiedFiles,
@@ -906,6 +1028,7 @@ export const useAgentStore = defineStore('agentStore', () => {
     switchSession,
     deleteSession,
     sendMessage,
+    revertAndResendMessage,
     abortGeneration,
     clearHistory,
     acceptAllChanges,

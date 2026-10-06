@@ -33,43 +33,64 @@ export const useUiBuilderStore = defineStore('uiBuilderStore', () => {
   // State Input & Output settings
   const uploadedImage = ref<string | null>(null)
   const uploadedImageName = ref<string>('')
-  const outputStack = ref<OutputStack>('vue-sfc')
+  const outputStack = ref<OutputStack>('html-tailwind')
   const viewportMode = ref<ViewportMode>('desktop')
   const activeTab = ref<'preview' | 'code' | 'assets'>('preview')
   const clickToEditActive = ref<boolean>(false)
 
-  // Multi-variant generation state
+  // Model selection state
+  const selectedModel = ref<string>('')
+
+  const currentModel = computed(() => {
+    return (
+      selectedModel.value ||
+      settingsStore.ai.defaultModel ||
+      agentStore.selectedModel ||
+      agentStore.availableModels[0] ||
+      'ag/gemini-3.6-flash-medium'
+    )
+  })
+
+  // Single session state
   const activeVariantIndex = ref<number>(0)
   const variants = ref<UiBuilderVariant[]>([])
 
   function initVariantsFromRouter(): void {
-    const models = agentStore.availableModels
-    const defaultModel = settingsStore.ai.defaultModel || models[0] || 'default'
-
-    const targetModels = [
-      defaultModel,
-      models[1] || defaultModel,
-      models[2] || defaultModel,
-      models[3] || defaultModel
+    const model = currentModel.value
+    variants.value = [
+      {
+        id: 'var-1',
+        index: 0,
+        name: `Slicing Agent (${getCleanModelLabel(model)})`,
+        model,
+        provider: detectProvider(model),
+        code: variants.value[0]?.code || '',
+        status: variants.value[0]?.status || 'idle'
+      }
     ]
-
-    variants.value = targetModels.map((model, idx) => ({
-      id: `var-${idx + 1}`,
-      index: idx,
-      name: `Varian ${idx + 1} (${getCleanModelLabel(model)})`,
-      model,
-      provider: detectProvider(model),
-      code: variants.value[idx]?.code || '',
-      status: variants.value[idx]?.status || 'idle'
-    }))
   }
 
-  // Initialize variants
-  initVariantsFromRouter()
+  function setSelectedModel(modelName: string): void {
+    selectedModel.value = modelName
+    if (variants.value[0]) {
+      variants.value[0].model = modelName
+      variants.value[0].name = `Slicing Agent (${getCleanModelLabel(modelName)})`
+      variants.value[0].provider = detectProvider(modelName)
+    }
+  }
+
+  // Load models if not yet loaded
+  if (agentStore.availableModels.length === 0) {
+    agentStore.loadModels().then(() => {
+      initVariantsFromRouter()
+    })
+  } else {
+    initVariantsFromRouter()
+  }
 
   // Sync variants whenever 9router models or defaultModel changes
   watch(
-    [() => agentStore.availableModels, () => settingsStore.ai.defaultModel],
+    [() => agentStore.availableModels, () => agentStore.selectedModel, () => settingsStore.ai.defaultModel, selectedModel],
     () => {
       initVariantsFromRouter()
     },
@@ -85,20 +106,24 @@ export const useUiBuilderStore = defineStore('uiBuilderStore', () => {
 
   // Computed Properties
   const activeVariant = computed(() => {
-    return variants.value[activeVariantIndex.value] || variants.value[0] || {
-      id: 'var-1',
-      index: 0,
-      name: 'Varian 1',
-      model: settingsStore.ai.defaultModel || '',
-      provider: 'custom',
-      code: '',
-      status: 'idle'
-    }
+    return (
+      variants.value[0] || {
+        id: 'var-1',
+        index: 0,
+        name: 'Slicing Agent',
+        model: currentModel.value,
+        provider: 'custom',
+        code: '',
+        status: 'idle'
+      }
+    )
   })
 
   const hasGeneratedCode = computed(() => {
-    return variants.value.some((v) => v.code.trim().length > 0)
+    return (variants.value[0]?.code || '').trim().length > 0
   })
+
+  const attachedHtml = ref<{ name: string; content: string } | null>(null)
 
   // Actions
   function setUploadedImage(dataUrl: string, filename = 'screenshot.png'): void {
@@ -110,6 +135,16 @@ export const useUiBuilderStore = defineStore('uiBuilderStore', () => {
     uploadedImage.value = null
     uploadedImageName.value = ''
     extractedAssets.value = []
+  }
+
+  function setAttachedHtml(filename: string, content: string): void {
+    attachedHtml.value = { name: filename, content }
+    setVariantCode(0, content)
+    setVariantStatus(0, 'ready')
+  }
+
+  function clearAttachedHtml(): void {
+    attachedHtml.value = null
   }
 
   function setViewportMode(mode: ViewportMode): void {
@@ -170,38 +205,60 @@ export const useUiBuilderStore = defineStore('uiBuilderStore', () => {
   function resetAll(): void {
     uploadedImage.value = null
     uploadedImageName.value = ''
+    attachedHtml.value = null
     extractedAssets.value = []
     chatMessages.value = []
     isGenerating.value = false
     activeActionText.value = ''
-    initVariantsFromRouter()
+    const model = currentModel.value
+    variants.value = [
+      {
+        id: 'var-1',
+        index: 0,
+        name: `Slicing Agent (${getCleanModelLabel(model)})`,
+        model,
+        provider: detectProvider(model),
+        code: '',
+        status: 'idle'
+      }
+    ]
     activeVariantIndex.value = 0
   }
 
-  async function saveActiveCodeToWorkspace(suggestedFileName?: string): Promise<{ success: boolean; fullPath?: string; fileName?: string }> {
+  async function saveActiveCodeToWorkspace(options?: { fileName?: string; targetDirectory?: string }): Promise<{ success: boolean; fullPath?: string; fileName?: string; error?: string }> {
     const workspaceStore = useWorkspaceStore()
     const code = activeVariant.value.code
-    if (!code) return { success: false }
+    if (!code) return { success: false, error: 'Tidak ada kode yang dihasilkan' }
 
     const extension = outputStack.value === 'vue-sfc' ? '.vue' : '.html'
-    const fileName = suggestedFileName || `GeneratedComponent${extension}`
+    const fileName = options?.fileName || `GeneratedComponent${extension}`
+    const targetDir = options?.targetDirectory || workspaceStore.activeRootPath || workspaceStore.rootFolderPath
+
+    if (!targetDir) {
+      return { success: false, error: 'Folder tujuan penyimpanan belum ditentukan' }
+    }
 
     try {
-      if (workspaceStore.activeRootPath) {
-        const fullPath = `${workspaceStore.activeRootPath}/${fileName}`.replace(/\\/g, '/')
-        await workspaceStore.createFile(fullPath, code)
-        return { success: true, fullPath, fileName }
+      const cleanDir = targetDir.replace(/\\/g, '/').replace(/\/+$/, '')
+      const fullPath = `${cleanDir}/${fileName}`
+      if (window.makaryaAPI) {
+        const writeRes = await window.makaryaAPI.writeFile(fullPath, code)
+        if (writeRes && !writeRes.success) {
+          return { success: false, error: writeRes.error || 'Gagal menulis berkas ke disk' }
+        }
       }
-      return { success: false }
-    } catch (err) {
+      await workspaceStore.refreshDirectory(cleanDir)
+      return { success: true, fullPath, fileName }
+    } catch (err: any) {
       console.error('Gagal menyimpan file ke workspace:', err)
-      return { success: false }
+      return { success: false, error: err.message || 'Terjadi kesalahan sistem' }
     }
   }
 
   return {
     uploadedImage,
     uploadedImageName,
+    attachedHtml,
     outputStack,
     viewportMode,
     activeTab,
@@ -214,8 +271,13 @@ export const useUiBuilderStore = defineStore('uiBuilderStore', () => {
     activeActionText,
     activeVariant,
     hasGeneratedCode,
+    selectedModel,
+    currentModel,
+    setSelectedModel,
     setUploadedImage,
     clearUploadedImage,
+    setAttachedHtml,
+    clearAttachedHtml,
     setViewportMode,
     setOutputStack,
     setActiveVariantIndex,

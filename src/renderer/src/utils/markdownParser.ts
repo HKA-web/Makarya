@@ -57,11 +57,13 @@ export function parseMarkdownBlocks(rawMarkdown: string): MarkdownContentBlock[]
 /**
  * Formats simple inline markdown elements (bold, italic, inline code) for text blocks safely.
  */
-export function formatInlineMarkdown(text: string): string {
-  if (!text) return ''
+export function formatInlineMarkdown(text?: any): string {
+  if (text === null || text === undefined) return ''
+  const str = typeof text === 'string' ? text : String(text)
+  if (!str) return ''
 
   // Escape HTML characters first for security
-  let formatted = text
+  let formatted = str
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')

@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import Dialog from 'primevue/dialog'
 import { useToast } from 'primevue/usetoast'
-import { useSettingsStore } from '@renderer/stores/settingsStore'
+import { useSettingsStore, TIMEZONE_OPTIONS, formatTimeWithConfig, formatDateTimeWithConfig } from '@renderer/stores/settingsStore'
 import { useAgentStore } from '@renderer/stores/agentStore'
 
 const settingsStore = useSettingsStore()
@@ -10,6 +10,41 @@ const agentStore = useAgentStore()
 const toast = useToast()
 
 const showApiKey = ref(false)
+
+// Real-time ticking clock for live preview
+const currentTime = ref(new Date())
+let clockTimer: any = null
+
+onMounted(() => {
+  clockTimer = setInterval(() => {
+    currentTime.value = new Date()
+  }, 1000)
+})
+
+onUnmounted(() => {
+  if (clockTimer) clearInterval(clockTimer)
+})
+
+const liveTimePreview = computed(() => {
+  return formatTimeWithConfig(
+    currentTime.value,
+    settingsStore.general.timezone,
+    settingsStore.general.timeFormat
+  )
+})
+
+const liveDatePreview = computed(() => {
+  return formatDateTimeWithConfig(
+    currentTime.value,
+    settingsStore.general.timezone,
+    settingsStore.general.timeFormat
+  )
+})
+
+const selectedTimezoneLabel = computed(() => {
+  const match = TIMEZONE_OPTIONS.find((t) => t.id === settingsStore.general.timezone)
+  return match ? match.label : settingsStore.general.timezone
+})
 
 const availableThemes = [
   { id: 'makarya-dark', name: 'Makarya Emerald (Default)', preview: '#090d14', accent: '#42b883' },
@@ -76,7 +111,7 @@ async function handleSync9Router(): Promise<void> {
     modal
     :closable="false"
     :dismissableMask="true"
-    :style="{ width: '640px', maxWidth: '92vw' }"
+    :style="{ width: '680px', maxWidth: '92vw' }"
     :pt="{
       root: {
         class: 'relative bg-[#0b101b]/95 backdrop-blur-2xl border border-white/[0.12] text-slate-100 rounded-2xl shadow-[0_25px_60px_-15px_rgba(0,0,0,0.85)] p-0 overflow-hidden ring-1 ring-white/[0.06] transition-all duration-300'
@@ -91,10 +126,10 @@ async function handleSync9Router(): Promise<void> {
     <!-- Top Glow Line -->
     <div class="h-[2px] w-full bg-gradient-to-r from-transparent via-[#42b883]/70 to-transparent"></div>
 
-    <!-- Modal Header (Persis seperti Gambar 2) -->
+    <!-- Modal Header -->
     <div class="px-5 py-4 border-b border-white/[0.08] flex items-center justify-between bg-white/[0.02]">
       <div class="flex items-center gap-2.5">
-        <UIcon name="i-lucide-palette" class="size-5 text-[#42b883]" />
+        <UIcon name="i-lucide-sliders" class="size-5 text-[#42b883]" />
         <h3 class="text-base font-bold text-white tracking-tight flex items-center gap-2">
           Application Settings
         </h3>
@@ -110,12 +145,12 @@ async function handleSync9Router(): Promise<void> {
       </button>
     </div>
 
-    <!-- 2 Navigation Tabs (Persis seperti Gambar 2) -->
-    <div class="flex items-center px-4 pt-2 border-b border-white/[0.08] bg-white/[0.01] gap-1">
+    <!-- 3 Navigation Tabs -->
+    <div class="flex items-center px-4 pt-2 border-b border-white/[0.08] bg-white/[0.01] gap-1 overflow-x-auto custom-scroll">
       <!-- Tab 1: Appearance & Theme -->
       <button
         @click="settingsStore.activeTab = 'appearance'"
-        class="relative px-3.5 py-2.5 rounded-t-xl text-xs font-medium flex items-center gap-2 transition-all cursor-pointer select-none"
+        class="relative px-3.5 py-2.5 rounded-t-xl text-xs font-medium flex items-center gap-2 transition-all cursor-pointer select-none flex-shrink-0"
         :class="settingsStore.activeTab === 'appearance'
           ? 'text-[#42b883] bg-white/[0.04] border-t-2 border-[#42b883] font-semibold'
           : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.02] border-t-2 border-transparent'"
@@ -124,15 +159,27 @@ async function handleSync9Router(): Promise<void> {
         <span>Appearance & Theme</span>
       </button>
 
-      <!-- Tab 2: AI Provider -->
+      <!-- Tab 2: Regional & Timezone -->
       <button
-        @click="settingsStore.activeTab = 'ai'"
-        class="relative px-3.5 py-2.5 rounded-t-xl text-xs font-medium flex items-center gap-2 transition-all cursor-pointer select-none"
-        :class="settingsStore.activeTab === 'ai'
-          ? 'text-indigo-400 bg-white/[0.04] border-t-2 border-indigo-400 font-semibold'
+        @click="settingsStore.activeTab = 'general'"
+        class="relative px-3.5 py-2.5 rounded-t-xl text-xs font-medium flex items-center gap-2 transition-all cursor-pointer select-none flex-shrink-0"
+        :class="settingsStore.activeTab === 'general'
+          ? 'text-[#42b883] bg-white/[0.04] border-t-2 border-[#42b883] font-semibold'
           : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.02] border-t-2 border-transparent'"
       >
-        <UIcon name="i-lucide-sparkles" class="size-4 text-indigo-400" />
+        <UIcon name="i-lucide-clock" class="size-4 text-[#42b883]" />
+        <span>Zona Waktu & Jam</span>
+      </button>
+
+      <!-- Tab 3: AI Provider -->
+      <button
+        @click="settingsStore.activeTab = 'ai'"
+        class="relative px-3.5 py-2.5 rounded-t-xl text-xs font-medium flex items-center gap-2 transition-all cursor-pointer select-none flex-shrink-0"
+        :class="settingsStore.activeTab === 'ai'
+          ? 'text-[#42b883] bg-white/[0.04] border-t-2 border-[#42b883] font-semibold'
+          : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.02] border-t-2 border-transparent'"
+      >
+        <UIcon name="i-lucide-sparkles" class="size-4 text-[#42b883]" />
         <span>AI Provider</span>
       </button>
     </div>
@@ -279,17 +326,194 @@ async function handleSync9Router(): Promise<void> {
         </div>
       </div>
 
-      <!-- ================= TAB 2: AI PROVIDER ================= -->
-      <div v-else class="space-y-5 animate-in fade-in duration-200">
+      <!-- ================= TAB 2: REGIONAL & TIMEZONE ================= -->
+      <div v-else-if="settingsStore.activeTab === 'general'" class="space-y-5 animate-in fade-in duration-200">
+        <!-- Live Clock & Timezone Status Card -->
+        <div class="relative overflow-hidden p-4 rounded-2xl bg-gradient-to-br from-emerald-950/40 via-[#0c1f17]/60 to-[#071710]/80 border border-[#42b883]/30 shadow-lg shadow-emerald-950/30">
+          <div class="absolute -right-8 -top-8 w-32 h-32 bg-[#42b883]/10 rounded-full blur-2xl pointer-events-none"></div>
+          
+          <div class="flex items-start justify-between relative z-10">
+            <div class="space-y-1">
+              <div class="flex items-center gap-2">
+                <span class="inline-flex relative flex h-2 w-2">
+                  <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#42b883] opacity-75"></span>
+                  <span class="relative inline-flex rounded-full h-2 w-2 bg-[#42b883]"></span>
+                </span>
+                <span class="text-[10px] font-semibold text-[#42b883] uppercase tracking-wider font-mono">Live Clock Preview</span>
+              </div>
+              <div class="text-2xl sm:text-3xl font-extrabold font-mono text-white tracking-tight pt-1">
+                {{ liveTimePreview }}
+              </div>
+              <div class="text-xs text-slate-300 font-medium">
+                {{ liveDatePreview }}
+              </div>
+            </div>
+
+            <div class="text-right">
+              <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#42b883]/15 border border-[#42b883]/30 text-[#42b883] text-xs font-mono font-medium">
+                <UIcon name="i-lucide-globe" class="size-3.5" />
+                <span>{{ settingsStore.general.timezone === 'auto' ? 'Auto Detect' : settingsStore.general.timezone }}</span>
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Section: Timezone Selection -->
+        <div class="space-y-3">
+          <label class="text-xs font-semibold text-slate-200 flex items-center justify-between">
+            <span class="flex items-center gap-1.5">
+              <UIcon name="i-lucide-globe-2" class="size-3.5 text-[#42b883]" />
+              Zona Waktu Aplikasi (Timezone)
+            </span>
+            <span class="text-[10px] text-[#42b883] font-mono">{{ settingsStore.general.timezone }}</span>
+          </label>
+
+          <!-- Quick Indonesia Timezone Preset Buttons -->
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <button
+              @click="settingsStore.general.timezone = 'Asia/Jakarta'"
+              class="px-2.5 py-2 rounded-xl border text-left transition-all cursor-pointer group flex flex-col justify-between"
+              :class="settingsStore.general.timezone === 'Asia/Jakarta'
+                ? 'bg-[#42b883]/20 border-[#42b883]/50 text-white shadow-xs'
+                : 'bg-white/[0.02] border-white/[0.06] hover:border-white/[0.15] text-slate-300 hover:text-white'"
+            >
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-bold text-[#42b883]">WIB</span>
+                <UIcon v-if="settingsStore.general.timezone === 'Asia/Jakarta'" name="i-lucide-check" class="size-3 text-[#42b883]" />
+              </div>
+              <span class="text-[10px] text-slate-400 font-mono">Jakarta (UTC+7)</span>
+            </button>
+
+            <button
+              @click="settingsStore.general.timezone = 'Asia/Makassar'"
+              class="px-2.5 py-2 rounded-xl border text-left transition-all cursor-pointer group flex flex-col justify-between"
+              :class="settingsStore.general.timezone === 'Asia/Makassar'
+                ? 'bg-[#42b883]/20 border-[#42b883]/50 text-white shadow-xs'
+                : 'bg-white/[0.02] border-white/[0.06] hover:border-white/[0.15] text-slate-300 hover:text-white'"
+            >
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-bold text-[#42b883]">WITA</span>
+                <UIcon v-if="settingsStore.general.timezone === 'Asia/Makassar'" name="i-lucide-check" class="size-3 text-[#42b883]" />
+              </div>
+              <span class="text-[10px] text-slate-400 font-mono">Bali/Mks (UTC+8)</span>
+            </button>
+
+            <button
+              @click="settingsStore.general.timezone = 'Asia/Jayapura'"
+              class="px-2.5 py-2 rounded-xl border text-left transition-all cursor-pointer group flex flex-col justify-between"
+              :class="settingsStore.general.timezone === 'Asia/Jayapura'
+                ? 'bg-[#42b883]/20 border-[#42b883]/50 text-white shadow-xs'
+                : 'bg-white/[0.02] border-white/[0.06] hover:border-white/[0.15] text-slate-300 hover:text-white'"
+            >
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-bold text-[#42b883]">WIT</span>
+                <UIcon v-if="settingsStore.general.timezone === 'Asia/Jayapura'" name="i-lucide-check" class="size-3 text-[#42b883]" />
+              </div>
+              <span class="text-[10px] text-slate-400 font-mono">Jayapura (UTC+9)</span>
+            </button>
+
+            <button
+              @click="settingsStore.general.timezone = 'auto'"
+              class="px-2.5 py-2 rounded-xl border text-left transition-all cursor-pointer group flex flex-col justify-between"
+              :class="settingsStore.general.timezone === 'auto'
+                ? 'bg-[#42b883]/20 border-[#42b883]/50 text-white shadow-xs'
+                : 'bg-white/[0.02] border-white/[0.06] hover:border-white/[0.15] text-slate-300 hover:text-white'"
+            >
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-bold text-[#42b883]">Otomatis</span>
+                <UIcon v-if="settingsStore.general.timezone === 'auto'" name="i-lucide-check" class="size-3 text-[#42b883]" />
+              </div>
+              <span class="text-[10px] text-slate-400 font-mono">Sistem Lokal</span>
+            </button>
+          </div>
+
+          <!-- Timezone Full Dropdown -->
+          <div class="relative pt-1">
+            <select
+              v-model="settingsStore.general.timezone"
+              class="w-full bg-[#0d1420] border border-white/[0.1] text-slate-200 text-xs rounded-xl px-3 py-2 pr-8 appearance-none focus:outline-none focus:border-[#42b883]/60 cursor-pointer font-sans"
+            >
+              <option v-for="tz in TIMEZONE_OPTIONS" :key="tz.id" :value="tz.id">
+                {{ tz.label }}
+              </option>
+            </select>
+            <UIcon name="i-lucide-chevron-down" class="size-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+          </div>
+        </div>
+
+        <!-- Section: Time Format (24h vs 12h) -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-3 border-t border-white/[0.06]">
+          <!-- Format Jam -->
+          <div class="space-y-2">
+            <label class="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+              <UIcon name="i-lucide-timer" class="size-3.5 text-[#42b883]" />
+              Format Jam Tampilan
+            </label>
+            <div class="grid grid-cols-2 gap-2">
+              <button
+                @click="settingsStore.general.timeFormat = '24h'"
+                class="py-2 px-3 rounded-xl border text-xs font-medium transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                :class="settingsStore.general.timeFormat === '24h'
+                  ? 'bg-[#42b883]/20 border-[#42b883]/50 text-[#42b883] font-semibold shadow-xs'
+                  : 'bg-white/[0.03] border-white/[0.06] hover:bg-white/[0.08] text-slate-300'"
+              >
+                <span>24 Jam</span>
+                <span class="text-[10px] text-slate-400 font-mono">(14:30)</span>
+              </button>
+
+              <button
+                @click="settingsStore.general.timeFormat = '12h'"
+                class="py-2 px-3 rounded-xl border text-xs font-medium transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                :class="settingsStore.general.timeFormat === '12h'
+                  ? 'bg-[#42b883]/20 border-[#42b883]/50 text-[#42b883] font-semibold shadow-xs'
+                  : 'bg-white/[0.03] border-white/[0.06] hover:bg-white/[0.08] text-slate-300'"
+              >
+                <span>12 Jam</span>
+                <span class="text-[10px] text-slate-400 font-mono">(02:30 PM)</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Format Tanggal -->
+          <div class="space-y-2">
+            <label class="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+              <UIcon name="i-lucide-calendar" class="size-3.5 text-[#42b883]" />
+              Format Tanggal
+            </label>
+            <div class="relative">
+              <select
+                v-model="settingsStore.general.dateFormat"
+                class="w-full bg-[#0d1420] border border-white/[0.1] text-slate-200 text-xs rounded-xl px-3 py-2 pr-8 appearance-none focus:outline-none focus:border-[#42b883]/60 cursor-pointer font-sans"
+              >
+                <option value="DD/MM/YYYY">DD/MM/YYYY (05/10/2026)</option>
+                <option value="YYYY-MM-DD">YYYY-MM-DD (2026-10-05)</option>
+                <option value="MM/DD/YYYY">MM/DD/YYYY (10/05/2026)</option>
+              </select>
+              <UIcon name="i-lucide-chevron-down" class="size-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            </div>
+          </div>
+        </div>
+
+        <!-- Info Card -->
+        <div class="p-3 rounded-xl bg-[#42b883]/10 border border-[#42b883]/20 text-[#42b883] flex items-start gap-2.5 text-xs">
+          <UIcon name="i-lucide-info" class="size-4 text-[#42b883] flex-shrink-0 mt-0.5" />
+          <p class="text-[11px] text-emerald-100/90 leading-relaxed">
+            Pengaturan zona waktu ini langsung diterapkan ke semua pesan Makarya AI Agent, riwayat sesi obrolan, status editor, dan log aktivitas.
+          </p>
+        </div>
+      </div>
+
+      <!-- ================= TAB 3: AI PROVIDER ================= -->
+      <div v-else-if="settingsStore.activeTab === 'ai'" class="space-y-5 animate-in fade-in duration-200">
         <!-- AI Connection Banner -->
-        <div class="p-3 rounded-xl bg-indigo-500/10 border border-indigo-500/25 flex items-center justify-between">
+        <div class="p-3 rounded-xl bg-[#42b883]/10 border border-[#42b883]/25 flex items-center justify-between">
           <div class="flex items-center gap-2.5">
-            <div class="w-8 h-8 rounded-lg bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
+            <div class="w-8 h-8 rounded-lg bg-[#42b883]/20 border border-[#42b883]/30 flex items-center justify-center text-[#42b883]">
               <UIcon name="i-lucide-bot" class="size-4" />
             </div>
             <div>
-              <h4 class="text-xs font-semibold text-indigo-200">Makarya AI Desktop Core</h4>
-              <p class="text-[10px] text-indigo-300/80">Layanan agen mandiri terhubung ke 9router lokal</p>
+              <h4 class="text-xs font-semibold text-emerald-100">Makarya AI Desktop Core</h4>
+              <p class="text-[10px] text-emerald-200/80">Layanan agen mandiri terhubung ke 9router lokal</p>
             </div>
           </div>
           <span
@@ -306,7 +530,7 @@ async function handleSync9Router(): Promise<void> {
         <div class="p-3.5 rounded-xl bg-white/[0.02] border border-white/[0.08] space-y-3">
           <div class="flex items-center justify-between">
             <h4 class="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
-              <UIcon name="i-lucide-router" class="size-3.5 text-indigo-400" />
+              <UIcon name="i-lucide-router" class="size-3.5 text-[#42b883]" />
               Kredensial & Endpoint 9router
             </h4>
             <span class="text-[9px] text-slate-500 font-mono">Tersimpan di SQLite Pribadi</span>
@@ -324,7 +548,7 @@ async function handleSync9Router(): Promise<void> {
                 v-model="settingsStore.ai.baseUrl"
                 type="text"
                 placeholder="http://127.0.0.1:20128/v1"
-                class="w-full bg-[#080d16] border border-white/[0.08] focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/25 rounded-lg pl-8 pr-3 py-1.5 text-xs text-slate-200 placeholder:text-slate-600 outline-none transition-all font-mono"
+                class="w-full bg-[#080d16] border border-white/[0.08] focus:border-[#42b883]/50 focus:ring-1 focus:ring-[#42b883]/25 rounded-lg pl-8 pr-3 py-1.5 text-xs text-slate-200 placeholder:text-slate-600 outline-none transition-all font-mono"
               />
             </div>
           </div>
@@ -341,7 +565,7 @@ async function handleSync9Router(): Promise<void> {
                 v-model="settingsStore.ai.apiKey"
                 :type="showApiKey ? 'text' : 'password'"
                 placeholder="sk-..."
-                class="w-full bg-[#080d16] border border-white/[0.08] focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/25 rounded-lg pl-8 pr-8 py-1.5 text-xs text-slate-200 placeholder:text-slate-600 outline-none transition-all font-mono"
+                class="w-full bg-[#080d16] border border-white/[0.08] focus:border-[#42b883]/50 focus:ring-1 focus:ring-[#42b883]/25 rounded-lg pl-8 pr-8 py-1.5 text-xs text-slate-200 placeholder:text-slate-600 outline-none transition-all font-mono"
               />
               <button
                 type="button"
@@ -359,7 +583,7 @@ async function handleSync9Router(): Promise<void> {
             <button
               @click="handleSync9Router"
               :disabled="agentStore.isModelsLoading"
-              class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/40 text-indigo-300 hover:text-white text-xs font-medium transition-all cursor-pointer shadow-xs active:scale-95 disabled:opacity-50"
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#42b883]/20 hover:bg-[#42b883]/30 border border-[#42b883]/40 text-[#42b883] hover:text-white text-xs font-medium transition-all cursor-pointer shadow-xs active:scale-95 disabled:opacity-50"
             >
               <UIcon name="i-lucide-refresh-cw" class="size-3" :class="{ 'animate-spin': agentStore.isModelsLoading }" />
               <span>{{ agentStore.isModelsLoading ? 'Menghubungkan...' : 'Simpan & Tes Koneksi 9router' }}</span>
@@ -371,14 +595,14 @@ async function handleSync9Router(): Promise<void> {
         <div class="space-y-2">
           <div class="flex items-center justify-between">
             <label class="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
-              <UIcon name="i-lucide-cpu" class="size-3.5 text-indigo-400" />
+              <UIcon name="i-lucide-cpu" class="size-3.5 text-[#42b883]" />
               Pilihan Model AI (Dari 9router)
             </label>
             <div class="flex items-center gap-2">
               <button
                 @click="agentStore.loadModels"
                 :disabled="agentStore.isModelsLoading"
-                class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-[10px] text-slate-300 hover:text-indigo-300 transition-all cursor-pointer disabled:opacity-50"
+                class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-[10px] text-slate-300 hover:text-[#42b883] transition-all cursor-pointer disabled:opacity-50"
                 title="Lookup ulang model dari 9router"
               >
                 <UIcon
@@ -388,7 +612,7 @@ async function handleSync9Router(): Promise<void> {
                 />
                 <span>{{ agentStore.isModelsLoading ? 'Mencari...' : 'Refresh 9router' }}</span>
               </button>
-              <span v-if="settingsStore.ai.defaultModel" class="text-[10px] text-indigo-400 font-mono truncate max-w-[140px]" :title="settingsStore.ai.defaultModel">
+              <span v-if="settingsStore.ai.defaultModel" class="text-[10px] text-[#42b883] font-mono truncate max-w-[140px]" :title="settingsStore.ai.defaultModel">
                 {{ settingsStore.ai.defaultModel }}
               </span>
               <span v-else class="text-[10px] text-slate-500 font-mono italic">
@@ -405,12 +629,12 @@ async function handleSync9Router(): Promise<void> {
               @click="selectAIModel(m)"
               class="p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between"
               :class="settingsStore.ai.defaultModel === m
-                ? 'bg-indigo-500/20 border-indigo-500/50 text-white shadow-xs'
+                ? 'bg-[#42b883]/15 border-[#42b883] text-white shadow-xs'
                 : 'bg-white/[0.02] border-white/[0.06] hover:border-white/[0.12] text-slate-300 hover:text-white'"
             >
               <div class="flex items-center justify-between mb-1">
                 <span class="text-xs font-bold truncate" :title="m">{{ m }}</span>
-                <UIcon v-if="settingsStore.ai.defaultModel === m" name="i-lucide-check-circle-2" class="size-3.5 text-indigo-400 flex-shrink-0" />
+                <UIcon v-if="settingsStore.ai.defaultModel === m" name="i-lucide-check-circle-2" class="size-3.5 text-[#42b883] flex-shrink-0" />
               </div>
               <span class="text-[9px] text-slate-500">Autonomous Coding</span>
             </button>
@@ -435,10 +659,10 @@ async function handleSync9Router(): Promise<void> {
         <div class="space-y-2 pt-3 border-t border-white/[0.06]">
           <div class="flex items-center justify-between">
             <label class="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
-              <UIcon name="i-lucide-sliders" class="size-3.5 text-indigo-400" />
+              <UIcon name="i-lucide-sliders" class="size-3.5 text-[#42b883]" />
               Kreativitas Jawaban (Temperature)
             </label>
-            <span class="text-xs font-mono font-bold text-indigo-400">{{ settingsStore.ai.temperature }}</span>
+            <span class="text-xs font-mono font-bold text-[#42b883]">{{ settingsStore.ai.temperature }}</span>
           </div>
           <input
             v-model.number="settingsStore.ai.temperature"

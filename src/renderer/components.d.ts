@@ -11,22 +11,10 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
-    AboutModal: typeof import('./src/components/AboutModal.vue')['default']
-    CommandPalette: typeof import('./src/components/CommandPalette.vue')['default']
-    QuickOpenModal: typeof import('./src/components/QuickOpenModal.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
-    SettingsModal: typeof import('./src/components/SettingsModal.vue')['default']
-    TabSwitcherModal: typeof import('./src/components/TabSwitcherModal.vue')['default']
     UApp: typeof import('./../../node_modules/@nuxt/ui/dist/runtime/components/App.vue')['default']
-    UBadge: typeof import('./../../node_modules/@nuxt/ui/dist/runtime/components/Badge.vue')['default']
-    UButton: typeof import('./../../node_modules/@nuxt/ui/dist/runtime/components/Button.vue')['default']
     UIcon: typeof import('./../../node_modules/@nuxt/ui/dist/runtime/vue/components/Icon.vue')['default']
-    UKbd: typeof import('./../../node_modules/@nuxt/ui/dist/runtime/components/Kbd.vue')['default']
     UModal: typeof import('./../../node_modules/@nuxt/ui/dist/runtime/components/Modal.vue')['default']
-    USelectMenu: typeof import('./../../node_modules/@nuxt/ui/dist/runtime/components/SelectMenu.vue')['default']
-    USeparator: typeof import('./../../node_modules/@nuxt/ui/dist/runtime/components/Separator.vue')['default']
-    UTextarea: typeof import('./../../node_modules/@nuxt/ui/dist/runtime/components/Textarea.vue')['default']
-    WindowSwitcherModal: typeof import('./src/components/WindowSwitcherModal.vue')['default']
   }
 }

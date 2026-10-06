@@ -221,18 +221,18 @@ async function handleRemoveApp(event: Event, appId: string): Promise<void> {
     }"
   >
     <!-- Top Glow Line -->
-    <div class="h-[2px] w-full bg-gradient-to-r from-transparent via-indigo-500/80 to-transparent"></div>
+    <div class="h-[2px] w-full bg-gradient-to-r from-transparent via-[#42b883]/80 to-transparent"></div>
 
     <!-- Modal Header (Windows Task View Style) -->
     <div class="px-6 py-4.5 border-b border-white/[0.08] flex items-center justify-between bg-white/[0.02]">
       <div class="flex items-center gap-3">
-        <div class="w-9 h-9 rounded-xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400 shadow-sm">
+        <div class="w-9 h-9 rounded-xl bg-[#42b883]/15 border border-[#42b883]/30 flex items-center justify-center text-[#42b883] shadow-sm">
           <UIcon name="i-lucide-layout-grid" class="size-5" />
         </div>
         <div>
           <h3 class="text-base font-bold text-white tracking-tight flex items-center gap-2">
             <span>Task View & Multi-Window Hub</span>
-            <span class="text-[10px] px-2 py-0.5 rounded-full font-mono bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">
+            <span class="text-[10px] px-2 py-0.5 rounded-full font-mono bg-[#42b883]/15 text-[#42b883] border border-[#42b883]/30">
               Win+Tab Mode
             </span>
           </h3>
@@ -335,7 +335,7 @@ async function handleRemoveApp(event: Event, appId: string): Promise<void> {
       <div class="space-y-3 pt-2">
         <div class="flex items-center justify-between">
           <h4 class="text-xs font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2 font-mono">
-            <UIcon name="i-lucide-box" class="size-3.5 text-indigo-400" />
+            <UIcon name="i-lucide-box" class="size-3.5 text-[#42b883]" />
             <span>Program & Aplikasi (.exe) Terdaftar</span>
             <span class="text-[10px] px-1.5 py-0.2 rounded bg-white/[0.06] text-slate-400 font-mono">
               {{ workspaceStore.registeredApps.length }}
@@ -353,7 +353,7 @@ async function handleRemoveApp(event: Event, appId: string): Promise<void> {
             class="group relative rounded-2xl bg-white/[0.03] hover:bg-white/[0.06] border p-4 transition-all duration-200 cursor-pointer shadow-sm hover:shadow-lg hover:-translate-y-0.5 flex flex-col justify-between overflow-hidden"
             :class="runningAppIds.has(app.id)
               ? 'border-emerald-500/40 bg-emerald-500/[0.03] shadow-emerald-500/5'
-              : 'border-white/[0.08] hover:border-indigo-500/50'"
+              : 'border-white/[0.08] hover:border-[#42b883]/50'"
           >
             <!-- Top App Header -->
             <div class="flex items-start justify-between mb-3">
@@ -361,7 +361,7 @@ async function handleRemoveApp(event: Event, appId: string): Promise<void> {
                 class="w-10 h-10 rounded-xl border flex items-center justify-center group-hover:scale-105 transition-transform shadow-xs"
                 :class="runningAppIds.has(app.id)
                   ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400'
-                  : 'bg-gradient-to-br from-indigo-500/20 to-purple-500/20 border-indigo-500/30 text-indigo-400'"
+                  : 'bg-[#42b883]/15 border-[#42b883]/30 text-[#42b883]'"
               >
                 <UIcon name="i-lucide-binary" class="size-5" />
               </div>
@@ -392,7 +392,7 @@ async function handleRemoveApp(event: Event, appId: string): Promise<void> {
             <div class="space-y-1">
               <h5 class="text-xs font-bold text-slate-200 truncate group-hover:text-white transition-colors flex items-center gap-1.5">
                 <span>{{ app.name }}</span>
-                <span class="text-[8px] font-mono px-1 py-0.2 rounded bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 uppercase">EXE</span>
+                <span class="text-[8px] font-mono px-1 py-0.2 rounded bg-[#42b883]/15 text-[#42b883] border border-[#42b883]/30 uppercase">EXE</span>
               </h5>
               <p class="text-[10px] text-slate-500 truncate font-mono" :title="app.exePath">
                 {{ app.exePath }}
@@ -418,10 +418,10 @@ async function handleRemoveApp(event: Event, appId: string): Promise<void> {
 
               <!-- Tombol Launch saat program sedang idle -->
               <div v-else class="flex items-center justify-between">
-                <span class="text-[10px] text-slate-400 flex items-center gap-1 group-hover:text-indigo-300 transition-colors">
+                <span class="text-[10px] text-slate-400 flex items-center gap-1 group-hover:text-[#42b883] transition-colors">
                   <UIcon
                     :name="isLaunchingId === app.id ? 'i-lucide-loader-2' : 'i-lucide-play'"
-                    class="size-3 text-indigo-400"
+                    class="size-3 text-[#42b883]"
                     :class="{ 'animate-spin': isLaunchingId === app.id }"
                   />
                   <span>{{ isLaunchingId === app.id ? 'Meluncurkan...' : 'Klik untuk Jalankan' }}</span>
@@ -435,9 +435,9 @@ async function handleRemoveApp(event: Event, appId: string): Promise<void> {
           <div class="relative">
             <button
               @click="isAddMenuOpen = !isAddMenuOpen"
-              class="w-full h-full min-h-[140px] rounded-2xl border-2 border-dashed border-white/[0.12] hover:border-indigo-400/60 bg-white/[0.01] hover:bg-indigo-500/[0.04] p-4 flex flex-col items-center justify-center gap-2.5 transition-all duration-200 cursor-pointer group text-center"
+              class="w-full h-full min-h-[140px] rounded-2xl border-2 border-dashed border-white/[0.12] hover:border-[#42b883]/60 bg-white/[0.01] hover:bg-[#42b883]/[0.04] p-4 flex flex-col items-center justify-center gap-2.5 transition-all duration-200 cursor-pointer group text-center"
             >
-              <div class="w-10 h-10 rounded-2xl bg-white/[0.04] group-hover:bg-indigo-500/20 border border-white/[0.08] group-hover:border-indigo-500/40 flex items-center justify-center text-slate-400 group-hover:text-indigo-300 transition-all shadow-xs group-hover:scale-110">
+              <div class="w-10 h-10 rounded-2xl bg-white/[0.04] group-hover:bg-[#42b883]/20 border border-white/[0.08] group-hover:border-[#42b883]/40 flex items-center justify-center text-slate-400 group-hover:text-[#42b883] transition-all shadow-xs group-hover:scale-110">
                 <UIcon name="i-lucide-plus" class="size-5 font-bold" />
               </div>
               <div class="space-y-0.5">
@@ -474,7 +474,7 @@ async function handleRemoveApp(event: Event, appId: string): Promise<void> {
                 @click="handlePickAndRegisterExe"
                 class="w-full text-left px-3 py-2.5 rounded-xl hover:bg-white/[0.06] text-xs text-slate-200 hover:text-white flex items-center gap-2.5 transition-colors cursor-pointer group"
               >
-                <div class="w-7 h-7 rounded-lg bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400 flex-shrink-0 group-hover:scale-105 transition-transform">
+                <div class="w-7 h-7 rounded-lg bg-[#42b883]/15 border border-[#42b883]/30 flex items-center justify-center text-[#42b883] flex-shrink-0 group-hover:scale-105 transition-transform">
                   <UIcon name="i-lucide-folder-cog" class="size-4" />
                 </div>
                 <div>

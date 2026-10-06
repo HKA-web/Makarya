@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
-import { readFile, writeFile, readdir, stat } from 'node:fs/promises'
-import { join, isAbsolute, resolve } from 'node:path'
+import { readFile, writeFile, readdir, stat, mkdir } from 'node:fs/promises'
+import { join, isAbsolute, resolve, dirname } from 'node:path'
 import { existsSync } from 'node:fs'
 
 export interface ToolDefinition {
@@ -274,6 +274,11 @@ export class AgentToolExecutor {
       }
     } catch {
       // New file creation
+    }
+
+    const parentDir = dirname(fullPath)
+    if (!existsSync(parentDir)) {
+      await mkdir(parentDir, { recursive: true })
     }
 
     await writeFile(fullPath, content, 'utf-8')

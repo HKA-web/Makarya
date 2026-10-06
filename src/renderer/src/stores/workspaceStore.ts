@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import type { FileEntry } from '../../../preload/index'
 import { detectMonacoLanguage, getFileIconClass } from '../utils/languageDetector'
 import { resolveHunk } from '../utils/diffEngine'
@@ -25,6 +25,18 @@ export interface WorkspaceRoot {
 
 export interface TabEditorViewState {
   cursorPosition?: { lineNumber: number; column: number }
+  selection?: {
+    startLineNumber: number
+    startColumn: number
+    endLineNumber: number
+    endColumn: number
+  }
+  selections?: Array<{
+    startLineNumber: number
+    startColumn: number
+    endLineNumber: number
+    endColumn: number
+  }>
   scrollTop?: number
   scrollLeft?: number
   monacoViewState?: any
@@ -184,6 +196,10 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     if (root) {
       root.isExpanded = !root.isExpanded
     }
+  }
+
+  function setActiveRootPath(path: string | null): void {
+    activeRootPath.value = path
   }
 
   // Backward compatible rootFolderPath
@@ -578,32 +594,57 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return undefined
   }
 
-  // Open a file from disk into a tab
-  async function openFile(filePath: string, fileName: string): Promise<void> {
-    recordRecentFile(filePath, fileName)
-    const existingTab = tabList.value.find((tab) => tab.filePath === filePath)
+  // Open a file from disk into a tab (with optional targetLine jump)
+  async function openFile(filePath: string, fileName: string, targetLine?: number): Promise<void> {
+    const rootPath = activeRootPath.value || (workspaceRoots.value[0]?.path) || null
+    let resolvedPath = filePath
+    if (rootPath && !filePath.match(/^([a-zA-Z]:|[\\/])/)) {
+      const sep = rootPath.includes('\\') ? '\\' : '/'
+      resolvedPath = `${rootPath.replace(/[\\/]+$/, '')}${sep}${filePath.replace(/^[\\/]+/, '')}`
+    }
+
+    recordRecentFile(resolvedPath, fileName)
+    saveCurrentEditorStateToActiveTab()
+
+    const norm = normalizePath(resolvedPath)
+    const existingTab = tabList.value.find((tab) => tab.filePath && normalizePath(tab.filePath) === norm)
     if (existingTab) {
       activeTabId.value = existingTab.id
+      updateMru(existingTab.id)
+      const pendingDiff = getPendingDiff(resolvedPath)
+      if (pendingDiff) {
+        existingTab.content = pendingDiff.newContent
+      }
+      if (targetLine && targetLine > 0) {
+        setTimeout(() => {
+          const editor = getActiveEditorInstance()
+          if (editor) {
+            editor.revealLineInCenter(targetLine)
+            editor.setPosition({ lineNumber: targetLine, column: 1 })
+            editor.focus()
+          }
+        }, 50)
+      }
       return
     }
 
     if (!window.makaryaAPI) return
 
-    const readResult = await window.makaryaAPI.readFile(filePath)
+    const readResult = await window.makaryaAPI.readFile(resolvedPath)
     if (readResult.error) {
-      console.error(`Gagal membaca file ${filePath}:`, readResult.error)
+      console.error(`Gagal membaca file ${resolvedPath}:`, readResult.error)
       return
     }
 
-    const detectedLang = detectMonacoLanguage(filePath)
+    const detectedLang = detectMonacoLanguage(resolvedPath)
     const iconClass = getFileIconClass(fileName, false)
 
     const newTab: WorkspaceTab = {
-      id: `tab-${filePath.replace(/[^a-zA-Z0-9]/g, '_')}`,
+      id: `tab-${resolvedPath.replace(/[^a-zA-Z0-9]/g, '_')}`,
       title: fileName,
       icon: iconClass,
       tabType: 'editor',
-      filePath,
+      filePath: resolvedPath,
       content: readResult.content,
       savedContent: readResult.content,
       isDirty: false,
@@ -618,6 +659,17 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     tabList.value.push(newTab)
     activeTabId.value = newTab.id
     updateMru(newTab.id)
+
+    if (targetLine && targetLine > 0) {
+      setTimeout(() => {
+        const editor = getActiveEditorInstance()
+        if (editor) {
+          editor.revealLineInCenter(targetLine)
+          editor.setPosition({ lineNumber: targetLine, column: 1 })
+          editor.focus()
+        }
+      }, 100)
+    }
   }
 
   // Update tab content on typing in Monaco
@@ -678,6 +730,40 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     }
   }
 
+  function closeOtherTabs(keepTabId: string): void {
+    tabList.value = tabList.value.filter((tab) => tab.id === keepTabId)
+    activeTabId.value = keepTabId
+    mruTabIds.value = [keepTabId]
+  }
+
+  function closeAllTabs(): void {
+    tabList.value = [
+      {
+        id: 'tab-welcome',
+        title: 'Selamat Datang',
+        icon: 'pi pi-home',
+        tabType: 'welcome',
+        content: '',
+        savedContent: '',
+        isDirty: false,
+        language: 'markdown'
+      }
+    ]
+    activeTabId.value = 'tab-welcome'
+    mruTabIds.value = ['tab-welcome']
+  }
+
+  function deduplicateTabs(): void {
+    const seen = new Set<string>()
+    tabList.value = tabList.value.filter((tab) => {
+      if (!tab.filePath) return true
+      const norm = normalizePath(tab.filePath)
+      if (seen.has(norm)) return false
+      seen.add(norm)
+      return true
+    })
+  }
+
   function getParentDirectoryPath(filePath: string): string {
     const cleanPath = filePath.replace(/[\\/]+$/, '')
     const lastSlashIndex = Math.max(cleanPath.lastIndexOf('/'), cleanPath.lastIndexOf('\\'))
@@ -708,14 +794,18 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   async function refreshDirectory(targetFolderPath?: string): Promise<void> {
     if (!window.makaryaAPI) return
 
-    // Re-read all workspace roots entries
+    // Re-read all workspace roots entries and trigger Vue reactivity with fresh array
+    const updatedRoots = []
     for (const root of workspaceRoots.value) {
       try {
-        root.entries = await window.makaryaAPI.readDirectory(root.path)
+        const entries = await window.makaryaAPI.readDirectory(root.path)
+        updatedRoots.push({ ...root, entries })
       } catch (err) {
         console.error(`Gagal membaca folder root ${root.path}:`, err)
+        updatedRoots.push({ ...root })
       }
     }
+    workspaceRoots.value = updatedRoots
 
     // If target folder is specified and is not one of the roots
     if (targetFolderPath && !workspaceRoots.value.some((r) => normalizePath(r.path) === normalizePath(targetFolderPath))) {
@@ -925,7 +1015,53 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     mruTabIds.value = [id, ...mruTabIds.value.filter((i) => i !== id)]
   }
 
+  function saveCurrentEditorStateToActiveTab(): void {
+    const activeEditor = getActiveEditorInstance()
+    if (activeEditor) {
+      try {
+        const pos = activeEditor.getPosition()
+        const selection = activeEditor.getSelection()
+        const selections = activeEditor.getSelections()
+        const scrollTop = activeEditor.getScrollTop()
+        const scrollLeft = activeEditor.getScrollLeft()
+        const monacoViewState = activeEditor.saveViewState()
+
+        saveActiveTabViewState(
+          {
+            cursorPosition: pos ? { lineNumber: pos.lineNumber, column: pos.column } : undefined,
+            selection:
+              selection && !selection.isEmpty()
+                ? {
+                    startLineNumber: selection.startLineNumber,
+                    startColumn: selection.startColumn,
+                    endLineNumber: selection.endLineNumber,
+                    endColumn: selection.endColumn
+                  }
+                : undefined,
+            selections:
+              selections && selections.length > 0
+                ? selections.map((s: any) => ({
+                    startLineNumber: s.startLineNumber,
+                    startColumn: s.startColumn,
+                    endLineNumber: s.endLineNumber,
+                    endColumn: s.endColumn
+                  }))
+                : undefined,
+            scrollTop,
+            scrollLeft,
+            monacoViewState
+          },
+          activeTabId.value
+        )
+      } catch (err) {
+        console.warn('Gagal menyimpan viewState saat berganti tab:', err)
+      }
+    }
+  }
+
   function setActiveTab(targetTabId: string): void {
+    if (activeTabId.value === targetTabId) return
+    saveCurrentEditorStateToActiveTab()
     activeTabId.value = targetTabId
     updateMru(targetTabId)
   }
@@ -1013,28 +1149,29 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   return {
     workspaceRoots,
     activeRootPath,
-    addWorkspaceRoot,
-    removeWorkspaceRoot,
-    setSingleWorkspaceRoot,
-    toggleRootExpanded,
-    loadWorkspaceRootsFromStorage,
     rootFolderPath,
-    openedFolderPath,
-    getEffectiveProjectRoot,
     fileTreeEntries,
+    toggleRootExpanded,
     tabList,
     activeTabId,
     activeTab,
-    isCommandPaletteVisible,
-    isQuickOpenVisible,
-    isWindowSwitcherVisible,
-    isTabSwitcherVisible,
+    openedFolderPath,
+    getEffectiveProjectRoot,
+    saveWorkspaceRootsToStorage,
+    loadWorkspaceRootsFromStorage,
+    addWorkspaceRoot,
+    removeWorkspaceRoot,
+    setSingleWorkspaceRoot,
+    setActiveRootPath,
     mruTabIds,
+    updateMru,
     tabsInMruOrder,
+    isTabSwitcherVisible,
     toggleTabSwitcher,
     cycleTab,
     registeredApps,
     activeWindows,
+    isWindowSwitcherVisible,
     toggleWindowSwitcher,
     closeWindowSwitcher,
     refreshActiveWindows,
@@ -1042,6 +1179,9 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     addRegisteredApp,
     removeRegisteredApp,
     recentFiles,
+    recordRecentFile,
+    loadRecentFilesFromStorage,
+    isQuickOpenVisible,
     toggleQuickOpen,
     closeQuickOpen,
     isCopilotPanelOpen,
@@ -1065,12 +1205,16 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     updateTabContent,
     saveActiveFile,
     closeTab,
+    closeOtherTabs,
+    closeAllTabs,
+    deduplicateTabs,
     setActiveTab,
     saveActiveTabViewState,
     getTabViewState,
     isAboutModalOpen,
     toggleAboutModal,
     openAboutModal,
+    isCommandPaletteVisible,
     toggleCommandPalette,
     toggleCopilotPanel,
     toggleSidebar,

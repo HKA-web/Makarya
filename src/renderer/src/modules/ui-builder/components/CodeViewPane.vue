@@ -7,7 +7,7 @@
           <UIcon name="i-lucide-code-2" class="w-3.5 h-3.5" />
         </div>
         <span class="text-xs font-semibold text-slate-200">
-          {{ store.outputStack === 'vue-sfc' ? 'Vue 3 Single File Component (.vue)' : 'HTML + Tailwind (.html)' }}
+          HTML + Tailwind (.html)
         </span>
       </div>
 

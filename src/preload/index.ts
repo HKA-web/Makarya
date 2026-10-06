@@ -5,7 +5,7 @@ import type {
   ToolFinishEventPayload,
   FileModifiedEventPayload,
   MultimodalContentPart
-} from './index'
+} from './index.d'
 
 const makaryaAPI = {
   ping: (): Promise<string> => ipcRenderer.invoke('system:ping'),
@@ -87,12 +87,35 @@ const makaryaAPI = {
     }>
     projectRoot?: string
     autoExecution?: string
+    reviewPolicy?: string
+    customTools?: Array<{
+      name: string
+      description: string
+      parameters?: any
+      pluginId?: string
+    }>
   }): Promise<{ accepted: boolean }> =>
     ipcRenderer.invoke('agent:chat-stream', payload),
   abortChatMessage: (requestId: string): Promise<{ aborted: boolean }> =>
     ipcRenderer.invoke('agent:chat-abort', requestId),
   respondToolApproval: (toolCallId: string, approved: boolean): Promise<boolean> =>
     ipcRenderer.invoke('agent:respond-tool-approval', toolCallId, approved),
+  respondCustomTool: (toolCallId: string, result: any): Promise<boolean> =>
+    ipcRenderer.invoke('agent:respond-custom-tool', toolCallId, result),
+  testDbConnection: (config: {
+    type: string
+    host: string
+    port?: number
+    database: string
+    username?: string
+    password?: string
+    authType?: string
+  }): Promise<{ success: boolean; latencyMs?: number; message?: string; error?: string }> =>
+    ipcRenderer.invoke('db:test-connection', config),
+  inspectDbSchema: (config: any): Promise<any> =>
+    ipcRenderer.invoke('db:inspect-schema', config),
+  executeDbLiveQuery: (payload: { config: any; sql: string; limit?: number }): Promise<any> =>
+    ipcRenderer.invoke('db:execute-live-query', payload),
   fetchAvailableModels: (): Promise<string[]> =>
     ipcRenderer.invoke('agent:get-models'),
   updateAiConfig: (config: { baseUrl?: string; apiKey?: string }): Promise<{ success: boolean }> =>
@@ -104,6 +127,13 @@ const makaryaAPI = {
     ipcRenderer.on('agent:tool-require-approval', listener)
     return (): void => {
       ipcRenderer.removeListener('agent:tool-require-approval', listener)
+    }
+  },
+  onAgentExecuteCustomTool: (callback: (data: { requestId: string; toolCallId: string; toolName: string; args: any }) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, data: { requestId: string; toolCallId: string; toolName: string; args: any }): void => callback(data)
+    ipcRenderer.on('agent:execute-custom-tool', listener)
+    return (): void => {
+      ipcRenderer.removeListener('agent:execute-custom-tool', listener)
     }
   },
   onAgentStreamToken: (callback: (data: { requestId: string; deltaContent: string }) => void): (() => void) => {

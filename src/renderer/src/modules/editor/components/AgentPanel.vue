@@ -5,6 +5,8 @@ import { useWorkspaceStore } from '@renderer/stores/workspaceStore'
 import { useAgentStore, type AgentToolCallItem } from '@renderer/stores/agentStore'
 import { useSettingsStore } from '@renderer/stores/settingsStore'
 import { parseMarkdownBlocks, formatInlineMarkdown } from '@renderer/utils/markdownParser'
+import { extractImplementationPlan, type ParsedImplementationPlan } from '@renderer/utils/planParser'
+import ImplementationPlanCard from './ImplementationPlanCard.vue'
 import { getNuxtFileIcon, detectMonacoLanguage } from '@renderer/utils/languageDetector'
 import logoImg from '@renderer/assets/logo.png'
 import iconImg from '@renderer/assets/icon.jpg'
@@ -17,6 +19,8 @@ const toast = useToast()
 const inputPrompt = ref('')
 const messagesContainerRef = ref<HTMLElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
+const promptEditorRef = ref<HTMLDivElement | null>(null)
+const isEditorEmpty = ref<boolean>(true)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 
 // Clipboard & Attached Images
@@ -102,17 +106,7 @@ const filteredSessions = computed(() => {
 
 function formatSessionDate(dateStr?: string): string {
   if (!dateStr) return ''
-  try {
-    const d = new Date(dateStr)
-    const now = new Date()
-    const diffHours = (now.getTime() - d.getTime()) / (1000 * 60 * 60)
-    if (diffHours < 24 && now.getDate() === d.getDate()) {
-      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    }
-    return d.toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-  } catch {
-    return dateStr
-  }
+  return settingsStore.formatDateTime(dateStr)
 }
 
 function handleOpenSessionsModal(): void {
@@ -211,12 +205,58 @@ const filteredModels = computed(() => {
 })
 
 const slashActions = [
+  { prefix: '/plan', label: 'Buat Rencana Implementasi (Implementation Plan)', icon: 'i-lucide-clipboard-list', prompt: 'Buatkan Dokumen Rencana Implementasi (Implementation Plan) terstruktur untuk: ' },
   { prefix: '/test', label: 'Test Sintaks File Aktif', icon: 'i-lucide-check-circle-2', prompt: 'Jalankan test sintaks pada file aktif ini dan periksa apakah ada error.' },
   { prefix: '/git', label: 'Cek Git Status', icon: 'i-lucide-git-branch', prompt: "Jalankan 'git status' di terminal dan rangkumkan perubahannya." },
   { prefix: '/review', label: 'Tinjau Perubahan (Review Changes)', icon: 'i-lucide-file-diff', prompt: 'Tinjau semua perubahan kode saat ini (git diff & git status) dan berikan ulasan ringkas.' },
   { prefix: '/debug', label: 'Audit Bug & Keamanan', icon: 'i-lucide-shield-alert', prompt: 'Analisis potensi bug dan kelemahan keamanan pada file yang sedang dibuka, lalu berikan saran perbaikan.' },
   { prefix: '/explain', label: 'Jelaskan Kode File Aktif', icon: 'i-lucide-book-open', prompt: 'Jelaskan cara kerja dan struktur file yang sedang saya buka ini secara terstruktur.' }
 ]
+
+function getMessageImplementationPlan(message: any): ParsedImplementationPlan | null {
+  if (!message || !message.content) return null
+  return extractImplementationPlan(message.content, message.toolCalls, message.modifiedFiles)
+}
+
+function handleExecutePlanFromCard(plan: ParsedImplementationPlan): void {
+  const tasksSummary = plan.tasks.map((t) => `- [${t.completed ? 'x' : ' '}] ${t.title}`).join('\n')
+  const prompt = `Silakan lanjutkan dan eksekusi Rencana Implementasi "${plan.title}" secara bertahap menggunakan tool terkait.\n\nDaftar Tahapan Kerja:\n${tasksSummary}\n\nJalankan pembuatan/modifikasi file dan pengujian sintaks/verifikasi sesuai rencana.`
+  handleSendMessage(prompt)
+}
+
+function handleRequestPlanRevision(plan: ParsedImplementationPlan): void {
+  inputPrompt.value = `Mengenai Rencana Implementasi "${plan.title}", tolong revisi dan sesuaikan beberapa hal berikut: `
+  adjustTextareaHeight()
+  nextTick(() => {
+    textareaRef.value?.focus()
+  })
+}
+
+function triggerPlanMode(): void {
+  if (!inputPrompt.value.startsWith('/plan')) {
+    inputPrompt.value = '/plan ' + inputPrompt.value.trim()
+  }
+  adjustTextareaHeight()
+  nextTick(() => {
+    textareaRef.value?.focus()
+  })
+}
+
+function renderMarkdown(text?: any): string {
+  if (text === null || text === undefined) return ''
+  const str = typeof text === 'string' ? text : String(text)
+  if (!str) return ''
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/`([^`]+)`/g, '<code class="bg-[#42b883]/10 text-[#42b883] border border-[#42b883]/20 px-1.5 py-0.5 rounded text-[10px] font-mono">$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong class="font-semibold text-zinc-100">$1</strong>')
+    .replace(/\*([^*]+)\*/g, '<em class="italic text-zinc-300">$1</em>')
+    .replace(/\n/g, '<br />')
+}
+
+const formatInlineMarkdown = renderMarkdown
 
 const filteredSlashActions = computed(() => {
   if (!inputPrompt.value.startsWith('/')) return []
@@ -313,6 +353,21 @@ watch(
   { deep: true }
 )
 
+function checkMentionAtCursor(): void {
+  const textarea = textareaRef.value
+  const val = inputPrompt.value
+  const cursorPos = textarea ? (textarea.selectionStart ?? val.length) : val.length
+  const textBefore = val.slice(0, cursorPos)
+  const match = textBefore.match(/(?:^|\s)@([a-zA-Z0-9_.\-\/\\]*)$/)
+  if (match) {
+    mentionQuery.value = match[1]
+    showMentionMenu.value = true
+    selectedMentionIndex.value = 0
+  } else {
+    showMentionMenu.value = false
+  }
+}
+
 // Check for slash command and @ mention triggers, plus dynamic auto-resize
 watch(inputPrompt, (newVal) => {
   adjustTextareaHeight()
@@ -325,14 +380,7 @@ watch(inputPrompt, (newVal) => {
   }
 
   // @ mention file
-  const mentionMatch = newVal.match(/(?:^|\s)@([a-zA-Z0-9_.\-\/\\]*)$/)
-  if (mentionMatch) {
-    mentionQuery.value = mentionMatch[1]
-    showMentionMenu.value = true
-    selectedMentionIndex.value = 0
-  } else {
-    showMentionMenu.value = false
-  }
+  checkMentionAtCursor()
 })
 
 // Scan workspace directory tree in background for quick @ mention suggestions
@@ -468,6 +516,88 @@ const filteredMentionCandidates = computed(() => {
     .slice(0, 15)
 })
 
+function getFileTypeInfo(fileName: string): { label: string; colorClass: string } {
+  const ext = fileName.split('.').pop()?.toLowerCase() || ''
+  if (ext === 'ts' || ext === 'tsx') return { label: 'TS', colorClass: 'text-blue-400' }
+  if (ext === 'js' || ext === 'jsx') return { label: 'JS', colorClass: 'text-amber-400' }
+  if (ext === 'vue') return { label: 'VUE', colorClass: 'text-emerald-400' }
+  if (ext === 'php') return { label: '</>', colorClass: 'text-indigo-400' }
+  if (ext === 'html') return { label: 'HTML', colorClass: 'text-orange-400' }
+  if (ext === 'css' || ext === 'scss') return { label: 'CSS', colorClass: 'text-sky-400' }
+  if (ext === 'json') return { label: '{}', colorClass: 'text-yellow-400' }
+  if (ext === 'md') return { label: 'MD', colorClass: 'text-slate-300' }
+  if (ext === 'py') return { label: 'PY', colorClass: 'text-yellow-500' }
+  if (ext === 'go') return { label: 'GO', colorClass: 'text-cyan-400' }
+  if (ext === 'rs') return { label: 'RS', colorClass: 'text-orange-500' }
+  if (ext === 'java' || ext === 'kt') return { label: 'JAVA', colorClass: 'text-red-400' }
+  if (ext === 'sql') return { label: 'SQL', colorClass: 'text-pink-400' }
+  return { label: '</>', colorClass: 'text-cyan-400' }
+}
+
+function formatUserMessage(content: string): string {
+  if (!content) return ''
+
+  const safe = content
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+
+  return safe.replace(/@([a-zA-Z0-9_.\-\/\\]+)(?::(L\d+(?:-L\d+)?))?/g, (_match, fileName, lineRange) => {
+    const info = getFileTypeInfo(fileName)
+    const linesHtml = lineRange ? `<span class="chip-line-range">${lineRange}</span>` : ''
+    return `<span class="inline-file-chip select-none cursor-pointer" data-file="${fileName}" ${lineRange ? `data-lines="${lineRange}"` : ''}><span class="chip-type-badge ${info.colorClass}">${info.label}</span><span class="chip-filename">${fileName}</span>${linesHtml}</span>`
+  })
+}
+
+function handleUserMessageClick(e: MouseEvent): void {
+  const target = (e.target as HTMLElement).closest('.inline-file-chip') as HTMLElement | null
+  if (target) {
+    const fileName = target.getAttribute('data-file')
+    const lines = target.getAttribute('data-lines')
+    let startLine: number | undefined
+    let endLine: number | undefined
+    if (lines) {
+      const match = lines.match(/L(\d+)(?:-L(\d+))?/)
+      if (match) {
+        startLine = parseInt(match[1], 10)
+        endLine = match[2] ? parseInt(match[2], 10) : startLine
+      }
+    }
+
+    if (fileName) {
+      const match =
+        workspaceStore.tabList.find((t) => t.title === fileName) ||
+        projectFilesCache.value.find((f) => f.name === fileName)
+      if (match) {
+        navigateToCode(match.path, match.name || fileName, startLine, endLine)
+      }
+    }
+  }
+}
+
+function insertTextAtCursor(textToInsert: string): void {
+  const textarea = textareaRef.value
+  if (textarea) {
+    const val = inputPrompt.value
+    const cursorPos = textarea.selectionStart ?? val.length
+    const textBefore = val.slice(0, cursorPos)
+    const textAfter = val.slice(cursorPos)
+    const needsSpace = textBefore.length > 0 && !textBefore.endsWith(' ') && !textToInsert.startsWith(' ')
+    const insertStr = (needsSpace ? ' ' : '') + textToInsert
+    inputPrompt.value = textBefore + insertStr + textAfter
+    const newCursor = cursorPos + insertStr.length
+    nextTick(() => {
+      textarea.focus()
+      textarea.setSelectionRange(newCursor, newCursor)
+      adjustTextareaHeight()
+    })
+  } else {
+    const needsSpace = inputPrompt.value.length > 0 && !inputPrompt.value.endsWith(' ') && !textToInsert.startsWith(' ')
+    inputPrompt.value += (needsSpace ? ' ' : '') + textToInsert
+    adjustTextareaHeight()
+  }
+}
+
 function selectMentionItem(item: MentionCandidate): void {
   addAttachedFile({
     path: item.path,
@@ -475,38 +605,72 @@ function selectMentionItem(item: MentionCandidate): void {
     isDirectory: item.isDirectory
   })
 
-  // Strip @query from input
-  inputPrompt.value = inputPrompt.value.replace(/(?:^|\s)@([a-zA-Z0-9_.\-\/\\]*)$/, (match) => {
-    return match.startsWith(' ') ? ' ' : ''
-  })
+  // Insert @filename at the exact cursor position, replacing partial @query
+  const textarea = textareaRef.value
+  if (textarea) {
+    const val = inputPrompt.value
+    const cursorPos = textarea.selectionStart ?? val.length
+    const textBefore = val.slice(0, cursorPos)
+    const textAfter = val.slice(cursorPos)
+
+    const match = textBefore.match(/@([a-zA-Z0-9_.\-\/\\]*)$/)
+    if (match) {
+      const matchStart = match.index!
+      inputPrompt.value = textBefore.slice(0, matchStart) + `@${item.name} ` + textAfter
+      const newCursor = matchStart + item.name.length + 2
+      nextTick(() => {
+        textarea.focus()
+        textarea.setSelectionRange(newCursor, newCursor)
+        adjustTextareaHeight()
+      })
+    } else {
+      inputPrompt.value = textBefore + `@${item.name} ` + textAfter
+      const newCursor = cursorPos + item.name.length + 2
+      nextTick(() => {
+        textarea.focus()
+        textarea.setSelectionRange(newCursor, newCursor)
+        adjustTextareaHeight()
+      })
+    }
+  } else {
+    inputPrompt.value += `@${item.name} `
+    adjustTextareaHeight()
+  }
 
   showMentionMenu.value = false
   selectedMentionIndex.value = 0
 
   toast.add({
     severity: 'info',
-    summary: item.isDirectory ? 'Folder Dilampirkan' : 'Berkas Dilampirkan',
-    detail: item.name,
+    summary: item.isDirectory ? 'Folder Ditautkan' : 'Berkas Ditautkan',
+    detail: `@${item.name}`,
     life: 2000
-  })
-
-  nextTick(() => {
-    const el = textareaRef.value?.$el || textareaRef.value
-    el?.focus?.()
   })
 }
 
 function triggerMentionInput(): void {
   refreshProjectFilesCache()
-  if (!inputPrompt.value.endsWith('@')) {
+  const textarea = textareaRef.value
+  if (textarea) {
+    const val = inputPrompt.value
+    const cursorPos = textarea.selectionStart ?? val.length
+    const textBefore = val.slice(0, cursorPos)
+    const textAfter = val.slice(cursorPos)
+    const needsSpace = textBefore.length > 0 && !textBefore.endsWith(' ')
+    const insertStr = (needsSpace ? ' ' : '') + '@'
+    inputPrompt.value = textBefore + insertStr + textAfter
+    const newCursor = cursorPos + insertStr.length
+    nextTick(() => {
+      textarea.focus()
+      textarea.setSelectionRange(newCursor, newCursor)
+      adjustTextareaHeight()
+    })
+  } else {
     inputPrompt.value += (inputPrompt.value && !inputPrompt.value.endsWith(' ') ? ' ' : '') + '@'
+    adjustTextareaHeight()
   }
   showMentionMenu.value = true
   selectedMentionIndex.value = 0
-  nextTick(() => {
-    const el = textareaRef.value?.$el || textareaRef.value
-    el?.focus?.()
-  })
 }
 
 function selectSlashAction(action: typeof slashActions[0]): void {
@@ -674,35 +838,15 @@ function handleTagToAgentEvent(e: Event): void {
   const detail = customEvent.detail
   if (!detail) return
 
-  const existingIndex = attachedFiles.value.findIndex(
-    (f) =>
-      f.path.toLowerCase() === detail.path.toLowerCase() &&
-      (f.lineRange || '') === (detail.lineRange || '')
-  )
+  addAttachedFile(detail)
+  const tagText = `@${detail.name}${detail.lineRange ? `:${detail.lineRange}` : ''} `
+  insertTextAtCursor(tagText)
 
-  if (existingIndex >= 0) {
-    attachedFiles.value[existingIndex] = {
-      ...attachedFiles.value[existingIndex],
-      ...detail
-    }
-  } else {
-    attachedFiles.value.push({
-      path: detail.path,
-      name: detail.name,
-      isDirectory: detail.isDirectory,
-      lineRange: detail.lineRange,
-      startLine: detail.startLine,
-      endLine: detail.endLine,
-      selectedSnippet: detail.selectedSnippet,
-      language: detail.language
-    })
-  }
-
-  nextTick(() => {
-    setTimeout(() => {
-      textareaRef.value?.focus()
-      adjustTextareaHeight()
-    }, 60)
+  toast.add({
+    severity: 'info',
+    summary: 'Kode Ditandai ke Chat',
+    detail: tagText.trim(),
+    life: 2000
   })
 }
 
@@ -710,8 +854,74 @@ function handleFocusAgentChat(): void {
   nextTick(() => {
     setTimeout(() => {
       textareaRef.value?.focus()
-      adjustTextareaHeight()
     }, 60)
+  })
+}
+
+const activeEditorFileContext = computed(() => {
+  const tab = workspaceStore.activeTab
+  if (!tab || !tab.filePath || tab.tabType !== 'editor') return null
+
+  const viewState = tab.viewState
+  let lineRange = ''
+  let startLine: number | undefined
+  let endLine: number | undefined
+
+  if (
+    viewState?.selection &&
+    (viewState.selection.startLineNumber !== viewState.selection.endLineNumber ||
+      viewState.selection.startColumn !== viewState.selection.endColumn)
+  ) {
+    startLine = viewState.selection.startLineNumber
+    endLine = viewState.selection.endLineNumber
+    lineRange = startLine === endLine ? `L${startLine}` : `L${startLine}-L${endLine}`
+  } else if (viewState?.cursorPosition) {
+    startLine = viewState.cursorPosition.lineNumber
+    endLine = viewState.cursorPosition.lineNumber
+    lineRange = `L${startLine}`
+  }
+
+  return {
+    path: tab.filePath,
+    name: tab.title,
+    language: tab.language,
+    lineRange,
+    startLine,
+    endLine
+  }
+})
+
+function tagCurrentActiveFileToAttached(): void {
+  if (!activeEditorFileContext.value) return
+  const currentEd = workspaceStore.getActiveEditorInstance()
+  let snippet = ''
+  if (currentEd) {
+    const selection = currentEd.getSelection()
+    const model = currentEd.getModel()
+    if (selection && model && !selection.isEmpty()) {
+      snippet = model.getValueInRange(selection)
+    }
+  }
+
+  const detail: AttachedFileItem = {
+    path: activeEditorFileContext.value.path,
+    name: activeEditorFileContext.value.name,
+    language: activeEditorFileContext.value.language,
+    lineRange: activeEditorFileContext.value.lineRange,
+    startLine: activeEditorFileContext.value.startLine,
+    endLine: activeEditorFileContext.value.endLine,
+    selectedSnippet: snippet || undefined
+  }
+
+  addAttachedFile(detail)
+  const tagText = `@${detail.name}${detail.lineRange ? `:${detail.lineRange}` : ''} `
+  insertTextAtCursor(tagText)
+
+  toast.add({
+    severity: 'info',
+    summary: 'Konteks Berkas Ditandai ke Chat',
+    detail: tagText.trim(),
+    life: 2000
   })
 }
 
@@ -784,15 +994,17 @@ async function handleDrop(e: DragEvent): Promise<void> {
     try {
       const entry = JSON.parse(makaryaRaw)
       if (entry && entry.path) {
+        const fileName = entry.name || entry.path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || entry.path
         addAttachedFile({
           path: entry.path,
-          name: entry.name || entry.path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || entry.path,
+          name: fileName,
           isDirectory: !!entry.isDirectory
         })
+        insertTextAtCursor(`@${fileName} `)
         toast.add({
           severity: 'info',
-          summary: entry.isDirectory ? 'Folder Dilampirkan' : 'Berkas Dilampirkan',
-          detail: entry.name || entry.path,
+          summary: entry.isDirectory ? 'Folder Ditautkan' : 'Berkas Ditautkan',
+          detail: `@${fileName}`,
           life: 2000
         })
         return
@@ -808,6 +1020,7 @@ async function handleDrop(e: DragEvent): Promise<void> {
   // 3. Cek native files dari OS Explorer atau browser
   const dtFiles = e.dataTransfer.files
   if (dtFiles && dtFiles.length > 0) {
+    let textToInsert = ''
     for (let i = 0; i < dtFiles.length; i++) {
       const f = dtFiles[i]
       if (f.type.startsWith('image/')) {
@@ -830,13 +1043,17 @@ async function handleDrop(e: DragEvent): Promise<void> {
         name: fileName,
         isDirectory: false
       })
+      textToInsert += `@${fileName} `
     }
-    toast.add({
-      severity: 'info',
-      summary: 'Berkas Dilampirkan',
-      detail: `${dtFiles.length} berkas berhasil ditambahkan`,
-      life: 2000
-    })
+    if (textToInsert) {
+      insertTextAtCursor(textToInsert)
+      toast.add({
+        severity: 'info',
+        summary: 'Berkas Ditautkan ke Chat',
+        detail: textToInsert.trim(),
+        life: 2000
+      })
+    }
     return
   }
 
@@ -848,10 +1065,11 @@ async function handleDrop(e: DragEvent): Promise<void> {
       name: fileName,
       isDirectory: false
     })
+    insertTextAtCursor(`@${fileName} `)
     toast.add({
       severity: 'info',
-      summary: 'Berkas Dilampirkan',
-      detail: fileName,
+      summary: 'Berkas Ditautkan ke Chat',
+      detail: `@${fileName}`,
       life: 2000
     })
   }
@@ -882,18 +1100,16 @@ async function handleSendMessage(customPrompt?: string): Promise<void> {
 
   const promptText = (customPrompt || inputPrompt.value).trim()
   const imagesToSend = customPrompt ? [] : [...attachedImages.value]
-  const filesToSend = customPrompt ? [] : [...attachedFiles.value]
 
-  if ((!promptText && imagesToSend.length === 0 && filesToSend.length === 0) || agentStore.isGenerating) return
+  if ((!promptText && imagesToSend.length === 0) || agentStore.isGenerating) return
 
   inputPrompt.value = ''
-  adjustTextareaHeight()
   attachedImages.value = []
-  attachedFiles.value = []
   showSlashMenu.value = false
   isModelMenuOpen.value = false
   isAttachMenuOpen.value = false
   isSettingsMenuOpen.value = false
+  adjustTextareaHeight()
 
   const activeTab = workspaceStore.activeTab
   const activeFileContext =
@@ -908,7 +1124,96 @@ async function handleSendMessage(customPrompt?: string): Promise<void> {
 
   const effectiveProjectRoot = connectedProject.value?.path || workspaceStore.getEffectiveProjectRoot()
 
-  // Baca isi berkas yang dilampirkan via IPC
+  // Extract all @mentions from promptText
+  const mentionMatches: Array<{ fileName: string; lineRange?: string; startLine?: number; endLine?: number }> = []
+  const mentionRegex = /@([a-zA-Z0-9_.\-\/\\]+)(?::(L\d+(?:-L\d+)?))?/g
+  let m: RegExpExecArray | null
+  while ((m = mentionRegex.exec(promptText)) !== null) {
+    const fileName = m[1]
+    const lineRange = m[2]
+    let startLine: number | undefined
+    let endLine: number | undefined
+    if (lineRange) {
+      const lMatch = lineRange.match(/L(\d+)(?:-L(\d+))?/)
+      if (lMatch) {
+        startLine = parseInt(lMatch[1], 10)
+        endLine = lMatch[2] ? parseInt(lMatch[2], 10) : startLine
+      }
+    }
+    mentionMatches.push({ fileName, lineRange, startLine, endLine })
+  }
+
+  // Find all file items for mentions & attached files
+  const resolvedFiles: AttachedFileItem[] = []
+  const seenPaths = new Set<string>()
+
+  for (const mention of mentionMatches) {
+    // 1. Check attachedFiles cache
+    const fromAttached = attachedFiles.value.find(
+      (f) =>
+        f.name.toLowerCase() === mention.fileName.toLowerCase() ||
+        f.path.toLowerCase().endsWith(mention.fileName.toLowerCase())
+    )
+    if (fromAttached) {
+      const key = fromAttached.path.toLowerCase() + (mention.lineRange || '')
+      if (!seenPaths.has(key)) {
+        seenPaths.add(key)
+        resolvedFiles.push({
+          ...fromAttached,
+          lineRange: mention.lineRange || fromAttached.lineRange,
+          startLine: mention.startLine ?? fromAttached.startLine,
+          endLine: mention.endLine ?? fromAttached.endLine
+        })
+      }
+      continue
+    }
+
+    // 2. Check activeTab & tabList
+    const fromTab = workspaceStore.tabList.find(
+      (t) =>
+        t.title.toLowerCase() === mention.fileName.toLowerCase() ||
+        (t.filePath && t.filePath.toLowerCase().endsWith(mention.fileName.toLowerCase()))
+    )
+    if (fromTab && fromTab.filePath) {
+      const key = fromTab.filePath.toLowerCase() + (mention.lineRange || '')
+      if (!seenPaths.has(key)) {
+        seenPaths.add(key)
+        resolvedFiles.push({
+          path: fromTab.filePath,
+          name: fromTab.title,
+          language: fromTab.language,
+          lineRange: mention.lineRange,
+          startLine: mention.startLine,
+          endLine: mention.endLine
+        })
+      }
+      continue
+    }
+
+    // 3. Check projectFilesCache
+    const fromCache = projectFilesCache.value.find(
+      (f) =>
+        f.name.toLowerCase() === mention.fileName.toLowerCase() ||
+        f.path.toLowerCase().endsWith(mention.fileName.toLowerCase())
+    )
+    if (fromCache) {
+      const key = fromCache.path.toLowerCase() + (mention.lineRange || '')
+      if (!seenPaths.has(key)) {
+        seenPaths.add(key)
+        resolvedFiles.push({
+          path: fromCache.path,
+          name: fromCache.name,
+          isDirectory: fromCache.isDirectory,
+          lineRange: mention.lineRange,
+          startLine: mention.startLine,
+          endLine: mention.endLine
+        })
+      }
+      continue
+    }
+  }
+
+  // Load content for all resolved files
   let attachedContexts: Array<{
     filePath: string
     fileName: string
@@ -920,15 +1225,21 @@ async function handleSendMessage(customPrompt?: string): Promise<void> {
     selectedSnippet?: string
   }> | undefined = undefined
 
-  if (filesToSend.length > 0) {
+  if (resolvedFiles.length > 0) {
     attachedContexts = await Promise.all(
-      filesToSend.map(async (f) => {
+      resolvedFiles.map(async (f) => {
         let content = ''
         if (f.selectedSnippet) {
           content = f.selectedSnippet
         } else if (!f.isDirectory && window.makaryaAPI?.readFile) {
           try {
             content = await window.makaryaAPI.readFile(f.path)
+            if (f.startLine && content) {
+              const lines = content.split('\n')
+              const startIdx = Math.max(0, f.startLine - 1)
+              const endIdx = f.endLine ? Math.min(lines.length, f.endLine) : startIdx + 1
+              content = lines.slice(startIdx, endIdx).join('\n')
+            }
           } catch (err) {
             console.warn(`Gagal membaca berkas lampiran ${f.path}:`, err)
             content = `(Gagal membaca berkas: ${err})`
@@ -1020,6 +1331,95 @@ function handleKeydown(event: KeyboardEvent): void {
 
 function handleReviewChanges(): void {
   handleSendMessage('Tinjau semua perubahan kode saat ini (jalankan git status dan git diff) dan berikan ulasan ringkas.')
+}
+
+const copiedMessageId = ref<string | null>(null)
+
+async function handleCopyMessage(msg: { id: string; content?: string }): Promise<void> {
+  if (!msg.content) return
+  try {
+    await navigator.clipboard.writeText(msg.content.trim())
+    copiedMessageId.value = msg.id
+    toast.add({
+      severity: 'info',
+      summary: 'Berhasil Disalin',
+      detail: 'Isi pesan berhasil disalin ke clipboard',
+      life: 2000
+    })
+    setTimeout(() => {
+      if (copiedMessageId.value === msg.id) {
+        copiedMessageId.value = null
+      }
+    }, 2000)
+  } catch (err) {
+    console.error('Failed to copy message:', err)
+  }
+}
+
+function handleEditUserMessage(msg: { content?: string; images?: string[]; attachedFiles?: any[] }): void {
+  if (!msg.content) return
+  inputPrompt.value = msg.content
+  if (msg.images && msg.images.length > 0) {
+    attachedImages.value = [...msg.images]
+  }
+  adjustTextareaHeight()
+  nextTick(() => {
+    textareaRef.value?.focus()
+  })
+  toast.add({
+    severity: 'info',
+    summary: 'Edit Prompt',
+    detail: 'Pesan telah dimuat ke input untuk diedit.',
+    life: 2000
+  })
+}
+
+async function handleResendUserMessage(msg: { id: string }): Promise<void> {
+  if (agentStore.isGenerating) return
+
+  if (!connectedProject.value?.path) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Target Project Diperlukan',
+      detail: 'Silakan pilih atau buka folder target project terlebih dahulu sebelum mengobrol dengan Agen.',
+      life: 3500
+    })
+    isSettingsMenuOpen.value = true
+    return
+  }
+
+  const activeTab = workspaceStore.activeTab
+  const activeFileContext =
+    activeTab && activeTab.filePath
+      ? {
+          filePath: activeTab.filePath,
+          fileName: activeTab.title,
+          content: activeTab.content,
+          language: activeTab.language
+        }
+      : undefined
+
+  const effectiveProjectRoot = connectedProject.value?.path || workspaceStore.getEffectiveProjectRoot()
+
+  toast.add({
+    severity: 'info',
+    summary: 'Kirim Ulang Prompt',
+    detail: 'Membatalkan perubahan dan respon sebelumnya lalu mengeksekusi ulang prompt...',
+    life: 2000
+  })
+
+  await agentStore.revertAndResendMessage(msg.id, activeFileContext, effectiveProjectRoot)
+}
+
+function handleClearChat(): void {
+  if (agentStore.messages.length === 0) return
+  agentStore.clearHistory()
+  toast.add({
+    severity: 'info',
+    summary: 'Percakapan Dibersihkan',
+    detail: 'Riwayat obrolan pada sesi ini telah dibersihkan.',
+    life: 2000
+  })
 }
 
 async function handleCopyText(text: string, label: string = 'Teks'): Promise<void> {
@@ -1348,9 +1748,9 @@ async function openFileWithDiff(file: {
 
         <!-- Clear Chat Button -->
         <button
-          @click="agentStore.clearHistory"
-          class="w-6 h-6 rounded-md flex items-center justify-center text-slate-400 hover:text-[#42b883] hover:bg-white/[0.06] transition-colors cursor-pointer"
-          title="Bersihkan Riwayat Percakapan"
+          @click="handleClearChat"
+          class="w-6 h-6 rounded-md flex items-center justify-center text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
+          title="Bersihkan Percakapan (Hapus Chat)"
         >
           <UIcon name="i-lucide-trash-2" class="size-3.5" />
         </button>
@@ -1463,48 +1863,65 @@ async function openFileWithDiff(file: {
           <span>{{ message.timestamp }}</span>
         </div>
 
-        <!-- User Message Bubble (Nuxt UI Chat Bubble - Distinct Green Style) -->
-        <div
-          v-if="message.role === 'user'"
-          class="max-w-[92%] bg-gradient-to-br from-[#185338] via-[#144730] to-[#0f3826] hover:from-[#1b5e40] hover:to-[#12432d] border border-[#42b883]/45 text-emerald-50 px-3.5 py-2 rounded-2xl rounded-tr-xs shadow-md shadow-[#42b883]/10 select-text font-normal space-y-1.5 text-[11px] transition-all"
-        >
-          <!-- Attached Files / Tagged Code Badge List in User Bubble -->
-          <div v-if="message.attachedFiles && message.attachedFiles.length > 0" class="flex flex-wrap gap-1.5 pb-1">
-            <button
-              v-for="(af, afIdx) in message.attachedFiles"
-              :key="afIdx"
-              type="button"
-              @click="navigateToCode(af.path, af.name, af.startLine, af.endLine)"
-              class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-black/40 hover:bg-black/60 border border-[#42b883]/30 hover:border-[#42b883]/60 text-emerald-200 text-[10px] font-mono shadow-xs transition-colors cursor-pointer text-left"
-              :title="af.path + (af.lineRange ? ` (${af.lineRange})\nKlik untuk lompat ke baris ini di editor` : '\nKlik untuk buka di editor')"
-            >
-              <UIcon
-                :name="af.lineRange ? 'i-lucide-code-xml' : getNuxtFileIcon(af.name).icon"
-                class="size-3 text-[#42b883] flex-shrink-0"
+        <!-- User Message Bubble Container (Nuxt UI Chat Bubble - Distinct Green Style) -->
+        <div v-if="message.role === 'user'" class="flex flex-col items-end max-w-[92%] group relative">
+          <div
+            class="w-full bg-gradient-to-br from-[#185338] via-[#144730] to-[#0f3826] hover:from-[#1b5e40] hover:to-[#12432d] border border-[#42b883]/45 text-emerald-50 px-3.5 py-2 rounded-2xl rounded-tr-xs shadow-md shadow-[#42b883]/10 select-text font-normal space-y-1.5 text-[11px] transition-all"
+          >
+            <!-- Attached Images Grid -->
+            <div v-if="message.images && message.images.length > 0" class="flex flex-wrap gap-1.5 pt-0.5">
+              <img
+                v-for="(img, imgIdx) in message.images"
+                :key="imgIdx"
+                :src="img"
+                alt="User Attachment"
+                class="max-h-36 max-w-full rounded-lg border border-[#42b883]/30 object-contain cursor-pointer hover:opacity-90 transition-opacity bg-black/40"
+                @click="openImageLightbox(img)"
               />
-              <span class="truncate max-w-[150px]">{{ af.name }}</span>
-              <span
-                v-if="af.lineRange"
-                class="text-[9px] px-1 py-0.2 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-bold"
-              >
-                {{ af.lineRange }}
-              </span>
-            </button>
+            </div>
+            <!-- Message Content with Inline Antigravity Badges -->
+            <div
+              v-if="message.content"
+              class="whitespace-pre-wrap leading-relaxed text-white font-medium"
+              v-html="formatUserMessage(message.content)"
+              @click="handleUserMessageClick"
+            ></div>
           </div>
 
-          <!-- Attached Images Grid -->
-          <div v-if="message.images && message.images.length > 0" class="flex flex-wrap gap-1.5 pt-0.5">
-            <img
-              v-for="(img, imgIdx) in message.images"
-              :key="imgIdx"
-              :src="img"
-              alt="User Attachment"
-              class="max-h-36 max-w-full rounded-lg border border-[#42b883]/30 object-contain cursor-pointer hover:opacity-90 transition-opacity bg-black/40"
-              @click="openImageLightbox(img)"
-            />
-          </div>
-          <div v-if="message.content" class="whitespace-pre-wrap leading-relaxed text-white font-medium">
-            {{ message.content }}
+          <!-- User Quick Actions: Resend / Revert, Edit Prompt & Copy Text -->
+          <div class="flex items-center gap-1 mt-1 opacity-0 group-hover:opacity-100 transition-opacity select-none">
+            <button
+              type="button"
+              @click="handleResendUserMessage(message)"
+              :disabled="agentStore.isGenerating"
+              class="flex items-center gap-1 px-2 py-0.5 rounded-lg text-[9px] font-medium text-slate-400 hover:text-[#42b883] hover:bg-white/[0.06] border border-white/[0.06] transition-colors cursor-pointer shadow-2xs disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Kirim ulang prompt (batalkan perubahan file & hapus respon sebelumnya)"
+            >
+              <UIcon name="i-lucide-undo" class="size-2.5" />
+              <span>Resend</span>
+            </button>
+            <button
+              type="button"
+              @click="handleEditUserMessage(message)"
+              class="flex items-center gap-1 px-2 py-0.5 rounded-lg text-[9px] font-medium text-slate-400 hover:text-[#42b883] hover:bg-white/[0.06] border border-white/[0.06] transition-colors cursor-pointer shadow-2xs"
+              title="Edit prompt ini di input chat"
+            >
+              <UIcon name="i-lucide-pencil" class="size-2.5" />
+              <span>Edit</span>
+            </button>
+            <button
+              type="button"
+              @click="handleCopyMessage(message)"
+              class="flex items-center gap-1 px-2 py-0.5 rounded-lg text-[9px] font-medium text-slate-400 hover:text-[#42b883] hover:bg-white/[0.06] border border-white/[0.06] transition-colors cursor-pointer shadow-2xs"
+              title="Salin isi prompt pengguna"
+            >
+              <UIcon
+                :name="copiedMessageId === message.id ? 'i-lucide-check' : 'i-lucide-copy'"
+                :class="copiedMessageId === message.id ? 'text-[#42b883]' : ''"
+                class="size-2.5"
+              />
+              <span>{{ copiedMessageId === message.id ? 'Tersalin' : 'Salin' }}</span>
+            </button>
           </div>
         </div>
 
@@ -1544,18 +1961,7 @@ async function openFileWithDiff(file: {
             </div>
           </div>
 
-          <!-- 2. "Working..." indicator with Vue Green Glow (ChatShimmer) -->
-          <div
-            v-if="message.isStreaming && message.activeAction"
-            class="flex items-center gap-1.5 text-[10px] font-medium py-0.5 px-0.5"
-          >
-            <span class="inline-block w-2 h-2 rounded-full vue-pulse-dot"></span>
-            <span class="vue-shimmer-text font-semibold tracking-wide">
-              {{ message.activeAction }}
-            </span>
-          </div>
-
-          <!-- 3. Tool Execution Cards (Nuxt UI ChatTool) -->
+          <!-- 2. Tool Execution Cards (Nuxt UI ChatTool - Child Processes) -->
           <div
             v-if="message.toolCalls && message.toolCalls.length > 0"
             class="space-y-1 my-1"
@@ -1617,27 +2023,35 @@ async function openFileWithDiff(file: {
                 </div>
               </div>
 
-              <!-- Approval Action Box (Ketika Auto Execution = Ask Before Execution) -->
+              <!-- Approval Action Box (Ketika Auto Execution = Ask Before atau Review Policy = Always Ask) -->
               <div
                 v-if="tool.status === 'waiting_approval'"
                 class="p-2.5 bg-[#0a0f19] border-t border-amber-500/25 space-y-2 select-none animate-in fade-in duration-150"
               >
-                <!-- Top Header & Command Block -->
+                <!-- Top Header & Command / File Block -->
                 <div class="flex items-start gap-2">
                   <div class="w-5 h-5 rounded-md bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 flex-shrink-0 mt-0.5">
                     <UIcon name="i-lucide-shield-alert" class="size-3" />
                   </div>
                   <div class="flex-1 min-w-0">
                     <div class="flex items-center justify-between gap-1.5">
-                      <span class="font-semibold text-amber-300 text-[10px]">Konfirmasi Eksekusi Terminal</span>
-                      <span class="text-[8px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 font-mono flex-shrink-0">Ask Before</span>
+                      <span class="font-semibold text-amber-300 text-[10px]">
+                        {{ tool.name === 'write_file' ? 'Konfirmasi Modifikasi Berkas' : (tool.name === 'execute_command' ? 'Konfirmasi Eksekusi Terminal' : 'Konfirmasi Aksi Tool') }}
+                      </span>
+                      <span class="text-[8px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 font-mono flex-shrink-0">
+                        {{ tool.name === 'write_file' ? 'Always Ask' : 'Ask Before' }}
+                      </span>
                     </div>
                     <div
                       class="mt-1 px-2 py-1 rounded-md bg-[#070b12] border border-white/[0.08] font-mono text-[10px] text-emerald-300 font-medium truncate flex items-center gap-1.5 shadow-inner"
-                      :title="tool.args?.command"
+                      :title="tool.name === 'execute_command' ? tool.args?.command : tool.args?.filePath"
                     >
-                      <span class="text-slate-500 select-none flex-shrink-0">$</span>
-                      <span class="truncate">{{ tool.args?.command || getToolDisplayLabel(tool) }}</span>
+                      <span v-if="tool.name === 'execute_command'" class="text-slate-500 select-none flex-shrink-0">$</span>
+                      <UIcon v-else-if="tool.name === 'write_file'" name="i-lucide-file-pen" class="size-3 text-emerald-400 flex-shrink-0" />
+                      <UIcon v-else name="i-lucide-wrench" class="size-3 text-slate-400 flex-shrink-0" />
+                      <span class="truncate">
+                        {{ tool.name === 'execute_command' ? (tool.args?.command || getToolDisplayLabel(tool)) : (tool.args?.filePath || getToolDisplayLabel(tool)) }}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -1690,6 +2104,26 @@ async function openFileWithDiff(file: {
             </div>
           </div>
 
+          <!-- 3. "Working..." / Live Process Status indicator placed ALWAYS BELOW Child Processes (Antigravity Style) -->
+          <div
+            v-if="message.isStreaming && message.activeAction"
+            class="flex items-center gap-2 text-[10px] font-medium py-1 px-1 text-slate-300 animate-in fade-in duration-200"
+          >
+            <span class="inline-block w-2 h-2 rounded-full bg-[#42b883] vue-pulse-dot flex-shrink-0"></span>
+            <span class="vue-shimmer-text font-medium text-slate-200 tracking-wide">
+              {{ message.activeAction }}
+            </span>
+          </div>
+
+          <!-- Interactive Antigravity Implementation Plan Card -->
+          <ImplementationPlanCard
+            v-if="getMessageImplementationPlan(message)"
+            :plan="getMessageImplementationPlan(message)!"
+            :is-generating="agentStore.isGenerating"
+            @execute-plan="handleExecutePlanFromCard"
+            @request-revision="handleRequestPlanRevision"
+          />
+
           <!-- 4. Final Markdown Content & Code Blocks (Nuxt UI ChatMessage) -->
           <div
             v-if="message.content"
@@ -1704,7 +2138,7 @@ async function openFileWithDiff(file: {
               <div
                 v-if="block.type === 'text'"
                 class="leading-relaxed prose-invert text-[11px] text-slate-200 break-words"
-                v-html="formatInlineMarkdown(block.content)"
+                v-html="renderMarkdown(block.content)"
               ></div>
 
               <!-- Code Block with Interactive Action Buttons -->
@@ -1726,16 +2160,6 @@ async function openFileWithDiff(file: {
                     >
                       <UIcon name="i-lucide-copy" class="size-2.5 text-slate-400 group-hover:text-[#42b883] transition-colors" />
                       <span>Salin</span>
-                    </button>
-
-                    <!-- Apply to Active Editor Button (Pill Style) -->
-                    <button
-                      @click="handleApplyToActiveEditor(block.content)"
-                      class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[9px] font-bold bg-[#42b883] hover:bg-[#34d399] text-[#090d14] shadow-xs shadow-[#42b883]/30 transition-all cursor-pointer active:scale-95"
-                      title="Terapkan Langsung ke File Aktif di Editor"
-                    >
-                      <UIcon name="i-lucide-arrow-down-to-dot" class="size-2.5" />
-                      <span>Terapkan</span>
                     </button>
                   </div>
                 </div>
@@ -1820,6 +2244,26 @@ async function openFileWithDiff(file: {
                 </div>
               </div>
             </div>
+          </div>
+
+          <!-- Assistant Actions Footer: Copy response -->
+          <div
+            v-if="!message.isStreaming && message.content"
+            class="flex items-center gap-1.5 pt-0.5 opacity-60 hover:opacity-100 transition-opacity select-none"
+          >
+            <button
+              type="button"
+              @click="handleCopyMessage(message)"
+              class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[9px] font-medium text-slate-400 hover:text-[#42b883] hover:bg-white/[0.06] border border-white/[0.06] transition-colors cursor-pointer shadow-2xs"
+              title="Salin seluruh respons balasan Agen"
+            >
+              <UIcon
+                :name="copiedMessageId === message.id ? 'i-lucide-check' : 'i-lucide-copy'"
+                :class="copiedMessageId === message.id ? 'text-[#42b883]' : ''"
+                class="size-2.5"
+              />
+              <span>{{ copiedMessageId === message.id ? 'Tersalin' : 'Salin Pesan' }}</span>
+            </button>
           </div>
         </div>
       </div>
@@ -2268,38 +2712,7 @@ async function openFileWithDiff(file: {
         class="bg-[#0c121d]/90 border border-white/[0.08] hover:border-white/[0.14] focus-within:border-[#42b883]/50 focus-within:ring-1 focus-within:ring-[#42b883]/25 rounded-2xl p-2.5 shadow-xl transition-all duration-200 space-y-1.5"
         @paste="handlePaste"
       >
-        <!-- Attached Files & Tagged Code Strip inside input pill -->
-        <div v-if="attachedFiles.length > 0" class="flex flex-wrap gap-1.5 pb-1 pt-0.5">
-          <div
-            v-for="(f, fIdx) in attachedFiles"
-            :key="f.path + (f.lineRange || '') + fIdx"
-            class="group inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#131d2e] border border-white/[0.1] hover:border-[#42b883]/40 text-slate-200 text-[10px] shadow-sm max-w-full transition-colors"
-            :title="f.selectedSnippet ? `${f.path} (${f.lineRange})\n\n${f.selectedSnippet.slice(0, 300)}` : f.path"
-          >
-            <UIcon
-              :name="f.isDirectory ? 'i-lucide-folder' : (f.lineRange ? 'i-lucide-code-xml' : getNuxtFileIcon(f.name).icon)"
-              class="size-3.5 flex-shrink-0"
-              :class="f.isDirectory ? 'text-amber-400' : (f.lineRange ? 'text-emerald-400' : getNuxtFileIcon(f.name).colorClass)"
-            />
-            <span class="truncate max-w-[130px] font-medium">{{ f.name }}</span>
-            <span
-              v-if="f.lineRange"
-              class="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 font-mono font-medium flex-shrink-0"
-            >
-              {{ f.lineRange }}
-            </span>
-            <button
-              type="button"
-              @click.stop="removeAttachedFile(fIdx)"
-              class="w-3.5 h-3.5 rounded-full hover:bg-rose-500/20 hover:text-rose-400 flex items-center justify-center text-slate-400 transition-colors cursor-pointer"
-              title="Hapus lampiran"
-            >
-              <UIcon name="i-lucide-x" class="size-2.5" />
-            </button>
-          </div>
-        </div>
-
-        <!-- Attached Images Strip inside input pill -->
+        <!-- Attached Images Strip at the TOP (No changes, stays at the top) -->
         <div v-if="attachedImages.length > 0" class="flex flex-wrap gap-1.5 pb-0.5 pt-0.5">
           <div
             v-for="(img, idx) in attachedImages"
@@ -2318,18 +2731,22 @@ async function openFileWithDiff(file: {
           </div>
         </div>
 
-        <!-- Input Textarea (Compact 1-row default dengan auto-shrink cerdas) -->
-        <textarea
-          ref="textareaRef"
-          v-model="inputPrompt"
-          rows="1"
-          :placeholder="!connectedProject ? '🔒 Tetapkan folder target project terlebih dahulu...' : 'Ask anything, tag code (Ctrl+L), paste (Ctrl+V), @, /'"
-          class="w-full bg-transparent border-none text-[11px] text-slate-100 placeholder:text-slate-500 focus:outline-none resize-none p-0 leading-relaxed font-sans min-h-[22px] max-h-[160px]"
-          :class="{ 'opacity-40 cursor-not-allowed select-none': !connectedProject }"
-          @input="adjustTextareaHeight"
-          @keydown="handleKeydown"
-          :disabled="!connectedProject || agentStore.isGenerating"
-        ></textarea>
+        <!-- Chat Input Textarea (Antigravity Style: Free-form typing with inline @file mentions anywhere) -->
+        <div class="relative min-h-[24px]">
+          <textarea
+            ref="textareaRef"
+            v-model="inputPrompt"
+            rows="1"
+            :placeholder="!connectedProject ? '🔒 Tetapkan folder target project terlebih dahulu...' : 'Ask anything, tag code (Ctrl+L), paste (Ctrl+V), @, /'"
+            class="w-full bg-transparent border-none text-[11px] text-slate-100 placeholder:text-slate-500 focus:outline-none resize-none p-0 leading-relaxed font-sans min-h-[22px] max-h-[160px]"
+            :class="{ 'opacity-40 cursor-not-allowed select-none': !connectedProject }"
+            @input="adjustTextareaHeight"
+            @keydown="handleKeydown"
+            @keyup="checkMentionAtCursor"
+            @click="checkMentionAtCursor"
+            :disabled="!connectedProject || agentStore.isGenerating"
+          ></textarea>
+        </div>
 
         <!-- Bottom Controls Row inside the Pill -->
         <div class="flex items-center justify-between pt-0.5">
@@ -2375,6 +2792,18 @@ async function openFileWithDiff(file: {
               title="Lampirkan Gambar (Atau Paste Ctrl+V dari Clipboard)"
             >
               <UIcon name="i-lucide-image" class="size-3" />
+            </button>
+            <!-- Plan Mode Button (/plan) -->
+            <button
+              @click="connectedProject ? triggerPlanMode() : (isSettingsMenuOpen = true)"
+              :disabled="!connectedProject"
+              class="w-6 h-6 rounded-full flex items-center justify-center transition-all border text-slate-400 flex-shrink-0 disabled:opacity-30 disabled:cursor-not-allowed"
+              :class="connectedProject
+                ? 'bg-white/[0.04] hover:bg-emerald-500/15 border-white/[0.08] hover:border-emerald-500/40 hover:text-emerald-400 cursor-pointer'
+                : 'bg-white/[0.02] border-white/[0.05]'"
+              title="Buat Rencana Implementasi (/plan)"
+            >
+              <UIcon name="i-lucide-clipboard-list" class="size-3" />
             </button>
             <input
               ref="fileInputRef"
@@ -2500,6 +2929,90 @@ async function openFileWithDiff(file: {
   border: none !important;
   box-shadow: none !important;
   outline: none !important;
+}
+
+/* Antigravity-Style Rich Prompt Input */
+.prompt-rich-input {
+  width: 100%;
+  min-height: 22px;
+  max-height: 160px;
+  overflow-y: auto;
+  outline: none;
+  border: none;
+  background: transparent;
+  color: #f1f5f9;
+  font-size: 11px;
+  line-height: 1.6;
+  font-family: inherit;
+  word-break: break-word;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
+.prompt-rich-input:empty:before,
+.prompt-rich-input[data-empty="true"]:before {
+  content: attr(data-placeholder);
+  color: #64748b;
+  pointer-events: none;
+}
+
+/* Antigravity-Style Inline File Chip */
+:deep(.inline-file-chip) {
+  display: inline-flex;
+  align-items: center;
+  gap: 3.5px;
+  background: rgba(19, 29, 46, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 5px;
+  padding: 1px 5px 1px 4.5px;
+  margin: 0 2px;
+  font-size: 11px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  vertical-align: middle;
+  user-select: none;
+  line-height: 1.3;
+}
+
+:deep(.inline-file-chip:hover) {
+  border-color: rgba(66, 184, 131, 0.5);
+  background: rgba(24, 36, 56, 0.95);
+}
+
+:deep(.inline-file-chip .chip-type-badge) {
+  font-size: 9.5px;
+  font-weight: 700;
+  font-family: monospace;
+}
+
+:deep(.inline-file-chip .chip-filename) {
+  color: #e2e8f0;
+  font-weight: 500;
+}
+
+:deep(.inline-file-chip .chip-line-range) {
+  font-size: 9px;
+  font-family: monospace;
+  background: rgba(66, 184, 131, 0.15);
+  border: 1px solid rgba(66, 184, 131, 0.3);
+  color: #42b883;
+  padding: 0 3px;
+  border-radius: 3px;
+}
+
+:deep(.inline-file-chip .chip-close-btn) {
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: bold;
+  cursor: pointer;
+  padding: 0 1px;
+  line-height: 1;
+  margin-left: 1px;
+  border-radius: 3px;
+  transition: color 120ms ease;
+}
+
+:deep(.inline-file-chip .chip-close-btn:hover) {
+  color: #fb7185;
 }
 </style>
 

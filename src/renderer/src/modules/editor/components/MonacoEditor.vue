@@ -4,7 +4,10 @@ import * as monaco from 'monaco-editor'
 import { useWorkspaceStore } from '@renderer/stores/workspaceStore'
 import { useAgentStore } from '@renderer/stores/agentStore'
 import { useSettingsStore } from '@renderer/stores/settingsStore'
+import { usePluginStore } from '@renderer/stores/pluginStore'
 import { computeInlineDiff, InlineDiffResult } from '@renderer/utils/diffEngine'
+import { registerAutoRenameTagProvider, setupAutoCloseTag } from '@renderer/utils/tagIntelligence'
+import { globalPluginEvents } from '@renderer/sdk/runtime'
 
 const props = withDefaults(
   defineProps<{
@@ -29,10 +32,12 @@ const emit = defineEmits<{
 
 const workspaceStore = useWorkspaceStore()
 const settingsStore = useSettingsStore()
+const pluginStore = usePluginStore()
 const editorContainerRef = ref<HTMLDivElement | null>(null)
 let editorInstance: monaco.editor.IStandaloneCodeEditor | null = null
 let resizeObserver: ResizeObserver | null = null
 let decorationsCollection: monaco.editor.IEditorDecorationsCollection | null = null
+let autoCloseDisposable: monaco.IDisposable | null = null
 
 // Diff state for current file
 const activeDiff = computed(() => {
@@ -84,6 +89,21 @@ function updateHunkPositions(): void {
 function applyDiffDecorations(): void {
   if (!editorInstance) return
 
+  const targetTab = workspaceStore.tabList.find((t) => t.id === props.tabId) || workspaceStore.activeTab
+  const targetFilePath = targetTab?.filePath || props.filePath || ''
+  const targetLanguage = targetTab?.language || props.language || 'plaintext'
+  const targetContent = targetTab?.content !== undefined ? targetTab.content : props.modelValue
+
+  const model = getOrCreateTextModel(
+    props.tabId || targetTab?.id || 'default',
+    targetFilePath,
+    targetContent,
+    targetLanguage
+  )
+  if (editorInstance.getModel() !== model) {
+    editorInstance.setModel(model)
+  }
+
   if (isDiffActive.value && diffData.value) {
     if (diffData.value.hunks.length === 0) {
       decorationsCollection?.clear()
@@ -97,7 +117,9 @@ function applyDiffDecorations(): void {
     }
 
     // 1. Set editor text to unified inline diff
-    editorInstance.setValue(diffData.value.unifiedText)
+    if (editorInstance.getValue() !== diffData.value.unifiedText) {
+      editorInstance.setValue(diffData.value.unifiedText)
+    }
     editorInstance.updateOptions({ readOnly: true })
 
     // 2. Build decorations
@@ -141,11 +163,9 @@ function applyDiffDecorations(): void {
     decorationsCollection?.clear()
     hunkPositions.value = []
     editorInstance.updateOptions({ readOnly: props.readOnly })
-    const targetContent = workspaceStore.activeTab?.filePath === props.filePath
-      ? workspaceStore.activeTab.content
-      : props.modelValue
-    if (editorInstance.getValue() !== targetContent) {
-      editorInstance.setValue(targetContent)
+    const normalContent = targetTab?.content !== undefined ? targetTab.content : props.modelValue
+    if (editorInstance.getValue() !== normalContent) {
+      editorInstance.setValue(normalContent)
     }
   }
 }
@@ -247,14 +267,176 @@ function registerCustomThemes(): void {
   })
 }
 
+// Persistent TextModels Map across tabs
+const textModelsMap = new Map<string, monaco.editor.ITextModel>()
+
+function getOrCreateTextModel(tabId: string, filePath: string, content: string, language: string): monaco.editor.ITextModel {
+  const modelKey = tabId || filePath || 'default'
+  const existing = textModelsMap.get(modelKey)
+  if (existing && !existing.isDisposed()) {
+    return existing
+  }
+
+  // Create clean URI for Monaco model tracking
+  const uri = filePath
+    ? monaco.Uri.file(filePath.replace(/\\/g, '/'))
+    : monaco.Uri.parse(`makarya://tab/${modelKey}`)
+
+  const existingByUri = monaco.editor.getModel(uri)
+  if (existingByUri && !existingByUri.isDisposed()) {
+    textModelsMap.set(modelKey, existingByUri)
+    return existingByUri
+  }
+
+  const model = monaco.editor.createModel(content, language, uri)
+  textModelsMap.set(modelKey, model)
+
+  // Listen to model changes - strictly tied to this specific tabId
+  model.onDidChangeContent(() => {
+    if (!isDiffActive.value) {
+      const updatedValue = model.getValue()
+      workspaceStore.updateTabContent(tabId, updatedValue)
+      saveCurrentViewState(tabId)
+      globalPluginEvents.emit('editor:content-change', { content: updatedValue, filePath })
+    }
+  })
+
+  return model
+}
+
+function saveCurrentViewState(specificTabId?: string): void {
+  if (!editorInstance || isDiffActive.value) return
+  const pos = editorInstance.getPosition()
+  const selection = editorInstance.getSelection()
+  const selections = editorInstance.getSelections()
+  const scrollTop = editorInstance.getScrollTop()
+  const scrollLeft = editorInstance.getScrollLeft()
+  const monacoViewState = editorInstance.saveViewState()
+
+  const targetTabId = specificTabId || props.tabId || workspaceStore.activeTabId
+  if (!targetTabId) return
+
+  workspaceStore.saveActiveTabViewState(
+    {
+      cursorPosition: pos ? { lineNumber: pos.lineNumber, column: pos.column } : undefined,
+      selection:
+        selection && !selection.isEmpty()
+          ? {
+              startLineNumber: selection.startLineNumber,
+              startColumn: selection.startColumn,
+              endLineNumber: selection.endLineNumber,
+              endColumn: selection.endColumn
+            }
+          : undefined,
+      selections:
+        selections && selections.length > 0
+          ? selections.map((s) => ({
+              startLineNumber: s.startLineNumber,
+              startColumn: s.startColumn,
+              endLineNumber: s.endLineNumber,
+              endColumn: s.endColumn
+            }))
+          : undefined,
+      scrollTop,
+      scrollLeft,
+      monacoViewState
+    },
+    targetTabId
+  )
+}
+
+function restoreTabViewState(targetTabId: string): void {
+  if (!editorInstance || isDiffActive.value) return
+  const savedState = workspaceStore.getTabViewState(targetTabId)
+  if (!savedState) return
+
+  if (savedState.monacoViewState) {
+    editorInstance.restoreViewState(savedState.monacoViewState)
+  }
+  if (savedState.selections && savedState.selections.length > 0) {
+    editorInstance.setSelections(
+      savedState.selections.map(
+        (s) => new monaco.Selection(s.startLineNumber, s.startColumn, s.endLineNumber, s.endColumn)
+      )
+    )
+  } else if (savedState.selection) {
+    editorInstance.setSelection(
+      new monaco.Selection(
+        savedState.selection.startLineNumber,
+        savedState.selection.startColumn,
+        savedState.selection.endLineNumber,
+        savedState.selection.endColumn
+      )
+    )
+  }
+  if (savedState.cursorPosition) {
+    editorInstance.setPosition(savedState.cursorPosition)
+  }
+  if (typeof savedState.scrollTop === 'number') {
+    editorInstance.setScrollTop(savedState.scrollTop)
+  }
+  if (typeof savedState.scrollLeft === 'number') {
+    editorInstance.setScrollLeft(savedState.scrollLeft)
+  }
+
+  // Microtask reassurance for visual highlight and layout centering
+  nextTick(() => {
+    setTimeout(() => {
+      if (!editorInstance || isDiffActive.value) return
+      if (savedState.monacoViewState) {
+        editorInstance.restoreViewState(savedState.monacoViewState)
+      }
+      if (savedState.selections && savedState.selections.length > 0) {
+        editorInstance.setSelections(
+          savedState.selections.map(
+            (s) => new monaco.Selection(s.startLineNumber, s.startColumn, s.endLineNumber, s.endColumn)
+          )
+        )
+      } else if (savedState.selection) {
+        editorInstance.setSelection(
+          new monaco.Selection(
+            savedState.selection.startLineNumber,
+            savedState.selection.startColumn,
+            savedState.selection.endLineNumber,
+            savedState.selection.endColumn
+          )
+        )
+      }
+      if (typeof savedState.scrollTop === 'number') {
+        editorInstance.setScrollTop(savedState.scrollTop)
+      }
+      if (savedState.cursorPosition) {
+        editorInstance.setPosition(savedState.cursorPosition)
+        editorInstance.revealPositionInCenterIfOutsideViewport(savedState.cursorPosition)
+      }
+    }, 40)
+  })
+}
+
 onMounted(() => {
   if (!editorContainerRef.value) return
 
   registerCustomThemes()
+  registerAutoRenameTagProvider(monaco)
+
+  // Always get or create model for current initial tab
+  const targetTab = workspaceStore.tabList.find((t) => t.id === props.tabId) || workspaceStore.activeTab
+  const targetFilePath = targetTab?.filePath || props.filePath || ''
+  const targetLanguage = targetTab?.language || props.language || 'plaintext'
+  const targetContent = isDiffActive.value && diffData.value
+    ? diffData.value.unifiedText
+    : (targetTab?.content !== undefined ? targetTab.content : props.modelValue)
+
+  const initialModel = getOrCreateTextModel(
+    props.tabId || targetTab?.id || 'default',
+    targetFilePath,
+    targetContent,
+    targetLanguage
+  )
 
   // Initialize Monaco editor instance
   editorInstance = monaco.editor.create(editorContainerRef.value, {
-    value: isDiffActive.value && diffData.value ? diffData.value.unifiedText : props.modelValue,
+    model: initialModel,
     language: props.language,
     theme: settingsStore.editor.theme,
     readOnly: isDiffActive.value || props.readOnly,
@@ -266,8 +448,31 @@ onMounted(() => {
     roundedSelection: true,
     scrollBeyondLastLine: false,
     tabSize: settingsStore.editor.tabSize,
-    cursorBlinking: settingsStore.editor.cursorBlinking
+    cursorBlinking: settingsStore.editor.cursorBlinking,
+    bracketPairColorization: {
+      enabled: true
+    },
+    guides: {
+      bracketPairs: true,
+      bracketPairsHorizontal: true,
+      highlightActiveBracketPair: true,
+      indentation: true,
+      highlightActiveIndentation: true
+    },
+    colorDecorators: true,
+    colorDecoratorsLimit: 500,
+    defaultColorDecorators: true,
+    linkedEditing: true,
+    autoClosingBrackets: 'always',
+    autoClosingQuotes: 'always',
+    suggest: {
+      showWords: true,
+      showSnippets: true
+    }
   })
+
+  // Attach Auto Close Tag engine
+  autoCloseDisposable = setupAutoCloseTag(editorInstance)
 
   // Register active editor instance globally
   workspaceStore.setActiveEditorInstance(editorInstance)
@@ -280,73 +485,17 @@ onMounted(() => {
     workspaceStore.setActiveEditorInstance(editorInstance)
   })
 
-  function saveCurrentViewState(): void {
-    if (!editorInstance || isDiffActive.value) return
-    const pos = editorInstance.getPosition()
-    const scrollTop = editorInstance.getScrollTop()
-    const scrollLeft = editorInstance.getScrollLeft()
-    const monacoViewState = editorInstance.saveViewState()
-
-    const targetTabId = props.tabId || workspaceStore.activeTabId
-    workspaceStore.saveActiveTabViewState(
-      {
-        cursorPosition: pos ? { lineNumber: pos.lineNumber, column: pos.column } : undefined,
-        scrollTop,
-        scrollLeft,
-        monacoViewState
-      },
-      targetTabId
-    )
-  }
-
-  // Restore saved view state (cursor position & scroll) when switching back to this tab
+  // Restore saved view state for current tab
   const targetTabId = props.tabId || workspaceStore.activeTabId
-  const savedState = workspaceStore.getTabViewState(targetTabId)
+  restoreTabViewState(targetTabId)
 
-  if (savedState && !isDiffActive.value) {
-    if (savedState.monacoViewState) {
-      editorInstance.restoreViewState(savedState.monacoViewState)
-    }
-    if (savedState.cursorPosition) {
-      editorInstance.setPosition(savedState.cursorPosition)
-    }
-    if (typeof savedState.scrollTop === 'number') {
-      editorInstance.setScrollTop(savedState.scrollTop)
-    }
-    if (typeof savedState.scrollLeft === 'number') {
-      editorInstance.setScrollLeft(savedState.scrollLeft)
-    }
-
-    // Ensure cursor is visible and centered after layout rendering
-    nextTick(() => {
-      setTimeout(() => {
-        if (!editorInstance || isDiffActive.value) return
-        if (savedState.monacoViewState) {
-          editorInstance.restoreViewState(savedState.monacoViewState)
-        }
-        if (typeof savedState.scrollTop === 'number') {
-          editorInstance.setScrollTop(savedState.scrollTop)
-        }
-        if (savedState.cursorPosition) {
-          editorInstance.setPosition(savedState.cursorPosition)
-          editorInstance.revealPositionInCenterIfOutsideViewport(savedState.cursorPosition)
-        }
-      }, 50)
-    })
-  }
-
-  // Listen for cursor position changes
-  editorInstance.onDidChangeCursorPosition(() => {
+  // Listen for cursor selection and position changes
+  editorInstance.onDidChangeCursorSelection(() => {
     saveCurrentViewState()
   })
 
-  // Listen for content changes
-  editorInstance.onDidChangeModelContent(() => {
-    if (editorInstance && !isDiffActive.value) {
-      const updatedValue = editorInstance.getValue()
-      emit('update:modelValue', updatedValue)
-      saveCurrentViewState()
-    }
+  editorInstance.onDidChangeCursorPosition(() => {
+    saveCurrentViewState()
   })
 
   // Track scrolling and layout for floating pill alignment & viewState persistence
@@ -482,6 +631,60 @@ function tagEditorSelectionToAgent(ed?: monaco.editor.IStandaloneCodeEditor | nu
   }
 }
 
+// Seamless Tab Switcher Watcher
+watch(
+  () => props.tabId,
+  (newTabId, oldTabId) => {
+    if (!editorInstance) return
+
+    // 1. Save view state for previous tab
+    if (oldTabId) {
+      saveCurrentViewState(oldTabId)
+    }
+
+    // 2. Switch or create TextModel for new tab
+    if (newTabId) {
+      const targetTab = workspaceStore.tabList.find((t) => t.id === newTabId) || workspaceStore.activeTab
+      const targetFilePath = targetTab?.filePath || props.filePath || ''
+      const targetContent = targetTab?.content !== undefined ? targetTab.content : props.modelValue
+      const targetLanguage = targetTab?.language || props.language || 'plaintext'
+
+      const model = getOrCreateTextModel(newTabId, targetFilePath, targetContent, targetLanguage)
+      if (editorInstance.getModel() !== model) {
+        editorInstance.setModel(model)
+      }
+
+      if (isDiffActive.value) {
+        applyDiffDecorations()
+      } else {
+        decorationsCollection?.clear()
+        hunkPositions.value = []
+        editorInstance.updateOptions({ readOnly: props.readOnly })
+        restoreTabViewState(newTabId)
+      }
+
+      editorInstance.focus()
+    }
+  }
+)
+
+// Auto-dispose models when tabs are closed (protect active editor model)
+watch(
+  () => workspaceStore.tabList.map((t) => t.id),
+  (tabIds) => {
+    const validIds = new Set(tabIds)
+    const activeEditorModel = editorInstance?.getModel()
+    for (const [key, model] of textModelsMap.entries()) {
+      if (!validIds.has(key)) {
+        if (!model.isDisposed() && model !== activeEditorModel) {
+          model.dispose()
+        }
+        textModelsMap.delete(key)
+      }
+    }
+  }
+)
+
 // React when active diff changes
 watch(
   () => activeDiff.value,
@@ -491,13 +694,19 @@ watch(
   { deep: true }
 )
 
+// Sync external content changes from workspaceStore into each tab's model (e.g. diff apply, disk reload)
 watch(
-  () => props.modelValue,
-  (newValue) => {
-    if (editorInstance && !isDiffActive.value && editorInstance.getValue() !== newValue) {
-      editorInstance.setValue(newValue)
+  () => workspaceStore.tabList.map((t) => ({ id: t.id, content: t.content })),
+  (tabs) => {
+    if (isDiffActive.value) return
+    for (const tab of tabs) {
+      const model = textModelsMap.get(tab.id)
+      if (model && !model.isDisposed() && model.getValue() !== tab.content) {
+        model.setValue(tab.content)
+      }
     }
-  }
+  },
+  { deep: true }
 )
 
 watch(
@@ -531,23 +740,8 @@ watch(
 )
 
 onBeforeUnmount(() => {
-  if (editorInstance && !isDiffActive.value) {
-    const pos = editorInstance.getPosition()
-    const scrollTop = editorInstance.getScrollTop()
-    const scrollLeft = editorInstance.getScrollLeft()
-    const monacoViewState = editorInstance.saveViewState()
-
-    const targetTabId = props.tabId || workspaceStore.activeTabId
-    workspaceStore.saveActiveTabViewState(
-      {
-        cursorPosition: pos ? { lineNumber: pos.lineNumber, column: pos.column } : undefined,
-        scrollTop,
-        scrollLeft,
-        monacoViewState
-      },
-      targetTabId
-    )
-  }
+  autoCloseDisposable?.dispose()
+  saveCurrentViewState()
 })
 
 onUnmounted(() => {
@@ -556,6 +750,13 @@ onUnmounted(() => {
   }
   resizeObserver?.disconnect()
   decorationsCollection?.clear()
+  // Dispose models
+  for (const model of textModelsMap.values()) {
+    if (!model.isDisposed()) {
+      model.dispose()
+    }
+  }
+  textModelsMap.clear()
   editorInstance?.dispose()
 })
 </script>
@@ -703,5 +904,30 @@ onUnmounted(() => {
   background-color: #10b981 !important;
   width: 4px !important;
   margin-left: 2px;
+}
+
+/* Global Indent Rainbow Styling */
+.indent-rainbow-color-1 {
+  background-color: rgba(255, 255, 64, 0.07) !important;
+}
+
+.indent-rainbow-color-2 {
+  background-color: rgba(127, 255, 127, 0.07) !important;
+}
+
+.indent-rainbow-color-3 {
+  background-color: rgba(255, 127, 255, 0.07) !important;
+}
+
+.indent-rainbow-color-4 {
+  background-color: rgba(79, 236, 236, 0.07) !important;
+}
+
+.indent-rainbow-color-5 {
+  background-color: rgba(255, 165, 0, 0.07) !important;
+}
+
+.indent-rainbow-color-6 {
+  background-color: rgba(186, 85, 211, 0.07) !important;
 }
 </style>

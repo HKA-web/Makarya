@@ -20,12 +20,16 @@
     "noFallthroughCasesInSwitch": true,
     "baseUrl": ".",
     "paths": {
-      "@renderer/*": ["src/renderer/src/*"]
+      "@renderer/*": ["src/renderer/src/*"],
+      "@makarya/sdk": ["packages/makarya-sdk/src/index.ts"],
+      "@makarya/sdk/*": ["packages/makarya-sdk/src/*"]
     }
   },
   "include": [
     "src/renderer/src/**/*",
     "src/renderer/src/**/*.vue",
+    "packages/makarya-sdk/src/**/*",
+    "packages/makarya-sdk/examples/**/*",
     "src/preload/*.d.ts"
   ]
 }

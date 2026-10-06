@@ -2,6 +2,7 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useWorkspaceStore } from '@renderer/stores/workspaceStore'
 import { useSettingsStore } from '@renderer/stores/settingsStore'
+import { usePluginStore } from '@renderer/stores/pluginStore'
 import MonacoEditor from './MonacoEditor.vue'
 import FileExplorer from './FileExplorer.vue'
 import AgentPanel from './AgentPanel.vue'
@@ -10,13 +11,13 @@ import CommandPalette from './CommandPalette.vue'
 import QuickOpenModal from './QuickOpenModal.vue'
 import WindowSwitcherModal from './WindowSwitcherModal.vue'
 import TabSwitcherModal from './TabSwitcherModal.vue'
-import SettingsModal from './SettingsModal.vue'
 import AboutModal from './AboutModal.vue'
 import { getNuxtFileIcon } from '@renderer/utils/languageDetector'
 import logoImg from '@renderer/assets/logo.png'
 
 const workspaceStore = useWorkspaceStore()
 const settingsStore = useSettingsStore()
+const pluginStore = usePluginStore()
 
 const activeHeaderMenu = ref<'file' | 'help' | null>(null)
 
@@ -56,6 +57,11 @@ async function handleMenuSaveFile(): Promise<void> {
   await workspaceStore.saveActiveFile()
 }
 
+function handleMenuSettings(): void {
+  closeHeaderMenu()
+  settingsStore.openSettings()
+}
+
 function handleMenuCommandPalette(): void {
   closeHeaderMenu()
   workspaceStore.toggleCommandPalette()
@@ -66,8 +72,55 @@ function handleMenuAbout(): void {
   workspaceStore.openAboutModal()
 }
 
+function handleTabBarWheel(e: WheelEvent): void {
+  const el = e.currentTarget as HTMLElement
+  if (el) {
+    el.scrollLeft += e.deltaY
+  }
+}
+
+function handleCloseOtherTabs(): void {
+  if (typeof workspaceStore.closeOtherTabs === 'function') {
+    workspaceStore.closeOtherTabs(workspaceStore.activeTabId)
+  } else {
+    workspaceStore.tabList = workspaceStore.tabList.filter((t) => t.id === workspaceStore.activeTabId)
+  }
+}
+
+function handleCloseAllTabs(): void {
+  if (typeof workspaceStore.closeAllTabs === 'function') {
+    workspaceStore.closeAllTabs()
+  } else {
+    workspaceStore.tabList = [
+      {
+        id: 'tab-welcome',
+        title: 'Selamat Datang',
+        icon: 'pi pi-home',
+        tabType: 'welcome',
+        content: '',
+        savedContent: '',
+        isDirty: false,
+        language: 'markdown'
+      }
+    ]
+    workspaceStore.activeTabId = 'tab-welcome'
+  }
+}
+
 onMounted(() => {
   window.addEventListener('click', handleWindowClick)
+  if (typeof workspaceStore.deduplicateTabs === 'function') {
+    workspaceStore.deduplicateTabs()
+  } else if (Array.isArray(workspaceStore.tabList)) {
+    const seen = new Set<string>()
+    workspaceStore.tabList = workspaceStore.tabList.filter((tab) => {
+      if (!tab.filePath) return true
+      const norm = tab.filePath.replace(/\\/g, '/').toLowerCase()
+      if (seen.has(norm)) return false
+      seen.add(norm)
+      return true
+    })
+  }
 })
 
 onUnmounted(() => {
@@ -133,6 +186,19 @@ onUnmounted(() => {
               </div>
               <span class="text-[10px] text-slate-500 group-hover:text-[#42b883] font-mono">Ctrl+S</span>
             </button>
+
+            <div class="h-[1px] bg-white/[0.08] my-1"></div>
+
+            <button
+              @click="handleMenuSettings"
+              class="w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between text-slate-300 hover:text-white hover:bg-[#42b883]/15 border border-transparent hover:border-[#42b883]/30 cursor-pointer text-left group"
+            >
+              <div class="flex items-center gap-2">
+                <UIcon name="i-lucide-settings" class="size-3.5 text-[#42b883]" />
+                <span>Pengaturan...</span>
+              </div>
+              <span class="text-[10px] text-slate-500 group-hover:text-[#42b883] font-mono">Ctrl+,</span>
+            </button>
           </div>
         </div>
 
@@ -164,6 +230,28 @@ onUnmounted(() => {
               <span class="text-[10px] text-slate-500 group-hover:text-[#42b883] font-mono">Ctrl+K</span>
             </button>
 
+            <button
+              @click="closeHeaderMenu(); workspaceStore.toggleTabSwitcher(true)"
+              class="w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between text-slate-300 hover:text-white hover:bg-[#42b883]/15 border border-transparent hover:border-[#42b883]/30 cursor-pointer text-left group"
+            >
+              <div class="flex items-center gap-2">
+                <UIcon name="i-lucide-arrow-left-right" class="size-3.5 text-[#42b883]" />
+                <span>Pindah Tab Aktif</span>
+              </div>
+              <span class="text-[10px] text-slate-500 group-hover:text-[#42b883] font-mono">Ctrl+Tab</span>
+            </button>
+
+            <button
+              @click="closeHeaderMenu(); pluginStore.isPluginManagerOpen = true"
+              class="w-full px-2.5 py-1.5 rounded-xl flex items-center justify-between text-slate-300 hover:text-white hover:bg-[#42b883]/15 border border-transparent hover:border-[#42b883]/30 cursor-pointer text-left group"
+            >
+              <div class="flex items-center gap-2">
+                <UIcon name="i-lucide-puzzle" class="size-3.5 text-[#42b883]" />
+                <span>Ekstensi & Plugin...</span>
+              </div>
+              <span class="text-[10px] text-slate-500 group-hover:text-[#42b883] font-mono">Ctrl+Shift+X</span>
+            </button>
+
             <div class="h-[1px] bg-white/[0.08] my-1"></div>
 
             <button
@@ -178,14 +266,6 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- Folder Breadcrumb Badge -->
-        <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-white/[0.03] border border-white/[0.06] text-xs text-slate-300">
-          <UIcon name="i-lucide-folder" class="size-3.5 text-[#42b883]" />
-          <span v-if="workspaceStore.workspaceRoots.length > 0" class="font-mono text-[11px] truncate max-w-[200px]">
-            {{ workspaceStore.workspaceRoots[0].name }}
-          </span>
-          <span v-else class="text-[11px] text-slate-500">Belum ada folder</span>
-        </div>
       </div>
 
       <!-- Center: Quick Search Trigger (Ctrl+E / Ctrl+K) -->
@@ -288,22 +368,13 @@ onUnmounted(() => {
           <UIcon name="i-lucide-folder" class="size-4" />
         </button>
 
-        <!-- Command Palette Button (Ctrl+K) -->
-        <button
-          @click="workspaceStore.toggleCommandPalette"
-          class="w-7.5 h-7.5 rounded-xl flex items-center justify-center text-slate-400 hover:text-slate-200 hover:bg-white/[0.04] border border-transparent hover:border-white/[0.06] transition-all duration-200 cursor-pointer"
-          title="Pencarian & Perintah (Ctrl+K)"
-        >
-          <UIcon name="i-lucide-search" class="size-4" />
-        </button>
-
         <!-- Quick Open File Search Button (Ctrl+E) -->
         <button
           @click="workspaceStore.toggleQuickOpen"
           class="w-7.5 h-7.5 rounded-xl flex items-center justify-center text-slate-400 hover:text-slate-200 hover:bg-white/[0.04] border border-transparent hover:border-white/[0.06] transition-all duration-200 cursor-pointer"
           title="Pencarian Berkas Project (Ctrl+E)"
         >
-          <UIcon name="i-lucide-file-search" class="size-4" />
+          <UIcon name="i-lucide-search" class="size-4" />
         </button>
 
         <!-- Task View & Multi-Window Hub Button (Ctrl+Shift+N) -->
@@ -311,11 +382,23 @@ onUnmounted(() => {
           @click="workspaceStore.toggleWindowSwitcher"
           class="w-7.5 h-7.5 rounded-xl flex items-center justify-center transition-all duration-200 cursor-pointer relative"
           :class="workspaceStore.isWindowSwitcherVisible
-            ? 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/40 shadow-xs shadow-indigo-500/20'
+            ? 'bg-[#42b883]/20 text-[#42b883] border border-[#42b883]/40 shadow-xs shadow-[#42b883]/20'
             : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04] border border-transparent hover:border-white/[0.06]'"
           title="Task View & Multi-Window Hub (Ctrl+Shift+N)"
         >
           <UIcon name="i-lucide-layout-grid" class="size-4" />
+        </button>
+
+        <!-- Extensions & Plugins Manager (Ctrl+Shift+X) -->
+        <button
+          @click="pluginStore.isPluginManagerOpen = true"
+          class="w-7.5 h-7.5 rounded-xl flex items-center justify-center transition-all duration-200 cursor-pointer relative"
+          :class="pluginStore.isPluginManagerOpen
+            ? 'bg-[#42b883]/20 text-[#42b883] border border-[#42b883]/40 shadow-xs shadow-[#42b883]/20'
+            : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04] border border-transparent hover:border-white/[0.06]'"
+          title="Ekstensi & Plugin (Ctrl+Shift+X)"
+        >
+          <UIcon name="i-lucide-puzzle" class="size-4" />
         </button>
 
         <div class="flex-1"></div>
@@ -335,59 +418,83 @@ onUnmounted(() => {
 
       <!-- Center Code Editor & Tabs Area (Rounded Floating Panel) -->
       <main class="flex-1 flex flex-col overflow-hidden bg-[#090d14] rounded-2xl border border-white/[0.08] shadow-sm">
-        <!-- Tab Bar (Multi-line wrap, no horizontal scroll) -->
-        <div class="min-h-9 py-1 px-1.5 bg-[#0b101b]/95 border-b border-white/[0.06] flex flex-wrap items-center gap-1.5 flex-shrink-0 max-h-32 overflow-y-auto custom-scroll">
+        <!-- Tab Bar (Single row horizontal scroll, Antigravity sleek design) -->
+        <div class="h-9 px-2 bg-[#0b101b]/95 border-b border-white/[0.06] flex items-center justify-between gap-1 flex-shrink-0 select-none">
+          <!-- Scrollable Tab Strip -->
           <div
-            v-for="tab in workspaceStore.tabList"
-            :key="tab.id"
-            @click="workspaceStore.setActiveTab(tab.id)"
-            :class="[
-              'h-7 px-3 flex items-center gap-2 text-xs rounded-xl cursor-pointer select-none group relative transition-colors',
-              workspaceStore.activeTabId === tab.id
-                ? 'bg-[#131d2e] text-[#42b883] font-medium border border-[#42b883]/30 shadow-xs'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04] border border-transparent'
-            ]"
+            @wheel.passive="handleTabBarWheel"
+            class="flex-1 flex items-center gap-1.5 overflow-x-auto overflow-y-hidden no-scrollbar py-1"
           >
-            <UIcon
-              :name="getNuxtFileIcon(tab.title, false).icon"
-              :class="[getNuxtFileIcon(tab.title, false).colorClass, 'size-3.5 flex-shrink-0']"
-            />
-            <span class="truncate max-w-[160px] text-[11px]">{{ tab.title }}</span>
-            <span
-              v-if="tab.isDirty"
-              class="w-2 h-2 rounded-full bg-amber-400 shadow-sm shadow-amber-400/50 ml-0.5"
-              title="Perubahan belum disimpan (Ctrl+S)"
-            ></span>
-            <button
-              @click.stop="workspaceStore.closeTab(tab.id)"
-              class="w-4 h-4 rounded-md flex items-center justify-center ml-1 cursor-pointer flex-shrink-0"
-              :class="workspaceStore.activeTabId === tab.id
-                ? 'text-slate-300 hover:text-rose-400 hover:bg-rose-500/20'
-                : 'text-slate-400/80 hover:text-rose-400 hover:bg-white/[0.08]'"
-              title="Tutup tab"
+            <div
+              v-for="tab in workspaceStore.tabList"
+              :key="tab.id"
+              @click="workspaceStore.setActiveTab(tab.id)"
+              :class="[
+                'h-7 px-3 flex items-center gap-1.5 text-xs rounded-full cursor-pointer select-none group relative transition-all flex-shrink-0 border shadow-xs',
+                workspaceStore.activeTabId === tab.id
+                  ? 'bg-[#131d2e] text-[#42b883] font-semibold border-[#42b883]/45 shadow-sm shadow-[#42b883]/10 ring-1 ring-[#42b883]/20'
+                  : 'bg-white/[0.03] text-slate-400 hover:text-slate-200 hover:bg-white/[0.07] border-white/[0.04] hover:border-white/[0.1]'
+              ]"
+              :title="tab.filePath || tab.title"
             >
-              <UIcon name="i-lucide-x" class="size-3" />
+              <UIcon
+                :name="getNuxtFileIcon(tab.title, false).icon"
+                :class="[getNuxtFileIcon(tab.title, false).colorClass, 'size-3.5 flex-shrink-0']"
+              />
+              <span class="truncate max-w-[140px] text-[11px] font-medium">{{ tab.title }}</span>
+              <span
+                v-if="tab.isDirty"
+                class="w-1.5 h-1.5 rounded-full bg-amber-400 shadow-sm shadow-amber-400/50 ml-0.5 flex-shrink-0"
+                title="Perubahan belum disimpan (Ctrl+S)"
+              ></span>
+              <button
+                @click.stop="workspaceStore.closeTab(tab.id)"
+                class="w-4 h-4 rounded-full flex items-center justify-center ml-0.5 cursor-pointer flex-shrink-0 transition-colors opacity-60 group-hover:opacity-100 hover:opacity-100"
+                :class="workspaceStore.activeTabId === tab.id
+                  ? 'text-slate-300 hover:text-rose-400 hover:bg-rose-500/20'
+                  : 'text-slate-400 hover:text-rose-400 hover:bg-white/[0.08]'"
+                title="Tutup tab"
+              >
+                <UIcon name="i-lucide-x" class="size-2.5" />
+              </button>
+            </div>
+          </div>
+
+          <!-- Tab Bar Right Quick Actions (Close All, Close Others) -->
+          <div v-if="workspaceStore.tabList.length > 1" class="flex items-center gap-1 pl-1 flex-shrink-0 border-l border-white/[0.06]">
+            <button
+              @click="handleCloseOtherTabs"
+              class="h-6 px-2.5 rounded-full text-[10px] text-slate-400 hover:text-white hover:bg-white/[0.06] border border-white/[0.04] hover:border-white/[0.08] transition-colors cursor-pointer flex items-center gap-1"
+              title="Tutup Tab Lainnya"
+            >
+              <UIcon name="i-lucide-x-circle" class="size-3" />
+              <span>Tutup Lainnya</span>
+            </button>
+            <button
+              @click="handleCloseAllTabs"
+              class="h-6 w-6 rounded-full flex items-center justify-center text-slate-400 hover:text-rose-400 hover:bg-rose-500/15 border border-white/[0.04] hover:border-rose-500/30 transition-colors cursor-pointer"
+              title="Tutup Semua Tab"
+            >
+              <UIcon name="i-lucide-x" class="size-3.5" />
             </button>
           </div>
         </div>
 
         <!-- Tab Body Container (Monaco Editor or Welcome Screen) -->
         <div class="flex-1 overflow-hidden relative">
-          <!-- Active Monaco Editor for Current File -->
-          <div v-if="workspaceStore.activeTab.tabType === 'editor'" class="w-full h-full">
+          <!-- Active Monaco Editor for Current File (Persistent Instance like VS Code / Antigravity) -->
+          <div v-show="workspaceStore.activeTab.tabType === 'editor'" class="w-full h-full">
             <MonacoEditor
-              :key="workspaceStore.activeTab.id"
               :tabId="workspaceStore.activeTab.id"
               :modelValue="workspaceStore.activeTab.content"
               :language="workspaceStore.activeTab.language"
               :filePath="workspaceStore.activeTab.filePath"
-              @update:modelValue="(val) => workspaceStore.updateTabContent(workspaceStore.activeTab.id, val)"
             />
           </div>
 
           <!-- Welcome Screen if no file is open (Premium Hero Aura) -->
           <div
-            v-else
+            v-if="workspaceStore.activeTab.tabType !== 'editor'"
             class="w-full h-full flex flex-col items-center justify-center p-6 text-center select-none space-y-5 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-[#42b883]/12 via-[#0b101b] to-[#090d14]"
           >
             <div class="w-36 h-28 flex items-center justify-center p-2.5 rounded-3xl bg-[#0c121d] border border-[#42b883]/35 shadow-2xl shadow-[#42b883]/20 backdrop-blur-md">
@@ -431,7 +538,6 @@ onUnmounted(() => {
     <WindowSwitcherModal />
     <QuickOpenModal />
     <CommandPalette />
-    <SettingsModal />
     <AboutModal v-model:visible="workspaceStore.isAboutModalOpen" />
   </div>
 </template>

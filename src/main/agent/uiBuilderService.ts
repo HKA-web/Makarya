@@ -1,5 +1,5 @@
 import type { BrowserWindow } from 'electron'
-import type { AiServiceConfiguration } from './aiService'
+import type { AiServiceConfiguration } from './vercelAiService'
 
 export interface UiBuilderStreamRequest {
   requestId: string
@@ -41,15 +41,9 @@ export class UiBuilderService {
       return
     }
 
-    const selectedModel = model || config.defaultModel
-    if (!selectedModel) {
-      if (targetWindow && !targetWindow.isDestroyed()) {
-        targetWindow.webContents.send('ui-builder:stream-error', {
-          requestId,
-          errorMessage: 'Tidak ada model AI yang dipilih. Pastikan 9router aktif dan model terdeteksi.'
-        })
-      }
-      return
+    let selectedModel = model || config.defaultModel
+    if (!selectedModel || selectedModel === 'default' || selectedModel === 'gpt-4o') {
+      selectedModel = (config.defaultModel && config.defaultModel !== 'default' ? config.defaultModel : '') || 'ag/gemini-3.6-flash-medium'
     }
 
     const abortController = new AbortController()

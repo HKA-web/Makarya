@@ -21,7 +21,8 @@ export default defineConfig({
   renderer: {
     resolve: {
       alias: {
-        '@renderer': resolve('src/renderer/src')
+        '@renderer': resolve('src/renderer/src'),
+        '@makarya/sdk': resolve('packages/makarya-sdk/src')
       }
     },
     plugins: [ui(), vue()],

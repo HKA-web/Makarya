@@ -1,12 +1,15 @@
 import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
-import { join, basename, parse, relative } from 'node:path'
+import { join, basename, parse, relative, dirname } from 'node:path'
 import { existsSync } from 'node:fs'
 import { readdir, readFile, writeFile, stat, mkdir, rename, rm, cp } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
+import * as net from 'node:net'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
-import { AiAgentService } from './agent/aiService'
+// Mesin AI Agent bertenaga Vercel AI SDK (Universal Provider, Auto Loop, Zod Validation)
+import { VercelAiAgentService as AiAgentService } from './agent/vercelAiService'
 import { uiBuilderService } from './agent/uiBuilderService'
 import { databaseService } from './db/databaseService'
+import { liveDatabaseDriverService } from './db/liveDbDriver'
 import { terminalService } from './terminal/terminalService'
 import { createSplashScreen } from './splash/splashService'
 
@@ -38,38 +41,53 @@ export interface WorkspaceFileItem {
   rootPath: string
 }
 
+const IGNORED_INDEX_FOLDERS = new Set([
+  '.git',
+  '.svn',
+  '.hg',
+  'node_modules',
+  'vendor',
+  '.vscode',
+  '.idea',
+  'dist',
+  'out',
+  'build',
+  '.next',
+  '.nuxt',
+  '.output',
+  'coverage',
+  '.cache',
+  '.tmp',
+  '__pycache__',
+  '.pytest_cache',
+  '.mypy_cache',
+  'venv',
+  '.venv',
+  'env',
+  '.env',
+  'site-packages',
+  '.turbo',
+  '.gradle',
+  'bin',
+  'obj'
+])
+
 async function collectWorkspaceFiles(
   directoryPath: string,
   rootPath: string,
-  maxFiles = 5000,
+  maxFiles = 50000,
   collected: WorkspaceFileItem[] = []
 ): Promise<WorkspaceFileItem[]> {
   if (collected.length >= maxFiles) return collected
 
   try {
-    const rawFileNames = await readdir(directoryPath, { withFileTypes: true })
-    for (const entry of rawFileNames) {
+    const rawEntries = await readdir(directoryPath, { withFileTypes: true })
+    for (const entry of rawEntries) {
       if (collected.length >= maxFiles) break
 
       const name = entry.name
-      // Ignore common noisy/huge directories & files for fast indexing
-      if (
-        name === '.git' ||
-        name === 'node_modules' ||
-        name === 'vendor' ||
-        name === '.vscode' ||
-        name === '.idea' ||
-        name === 'dist' ||
-        name === 'out' ||
-        name === 'build' ||
-        name === '.next' ||
-        name === '.nuxt' ||
-        name === 'coverage' ||
-        name === '.cache' ||
-        name === '.tmp' ||
-        name.endsWith('.sqlite') ||
-        name.endsWith('.sqlite-journal')
-      ) {
+      // Ignore common noisy, cache, and huge directories
+      if (IGNORED_INDEX_FOLDERS.has(name) || name.endsWith('.sqlite-journal') || name.endsWith('.pyc')) {
         continue
       }
 
@@ -175,6 +193,10 @@ function createPrimaryWindow(
   win.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
     return { action: 'deny' }
+  })
+
+  win.webContents.on('console-message', (_event, _level, message, line, sourceId) => {
+    console.log(`[Renderer] ${message} (${sourceId}:${line})`)
   })
 
   const queryParams = mode === 'blank-app' ? '?mode=blank-app' : ''
@@ -482,9 +504,14 @@ function registerIpcHandlers(): void {
   // Write file to disk (Save)
   ipcMain.handle('fs:write-file', async (_event, targetFilePath: string, fileContent: string) => {
     try {
+      const parentDir = dirname(targetFilePath)
+      if (!existsSync(parentDir)) {
+        await mkdir(parentDir, { recursive: true })
+      }
       await writeFile(targetFilePath, fileContent, 'utf-8')
       return { success: true }
     } catch (writeError: any) {
+      console.error('Error writing file:', writeError)
       return { success: false, error: writeError?.message || 'Gagal menyimpan file' }
     }
   })
@@ -583,7 +610,7 @@ function registerIpcHandlers(): void {
       const allFiles: WorkspaceFileItem[] = []
       for (const root of rootPaths) {
         if (existsSync(root)) {
-          const files = await collectWorkspaceFiles(root, root, 4000)
+          const files = await collectWorkspaceFiles(root, root, 50000)
           allFiles.push(...files)
         }
       }
@@ -673,6 +700,24 @@ function registerIpcHandlers(): void {
     return aiAgentService.respondToolApproval(toolCallId, approved)
   })
 
+  // AI Agent Respond to Custom Plugin Tool Execution
+  ipcMain.handle('agent:respond-custom-tool', async (_event, toolCallId: string, result: any) => {
+    return aiAgentService.respondCustomTool(toolCallId, result)
+  })
+
+  // Live Database Operations Handlers (PostgreSQL, MySQL, SQLite, SQL Server)
+  ipcMain.handle('db:test-connection', async (_event, config: any) => {
+    return liveDatabaseDriverService.testConnection(config)
+  })
+
+  ipcMain.handle('db:inspect-schema', async (_event, config: any) => {
+    return liveDatabaseDriverService.inspectSchema(config)
+  })
+
+  ipcMain.handle('db:execute-live-query', async (_event, payload: { config: any; sql: string; limit?: number }) => {
+    return liveDatabaseDriverService.executeQuery(payload.config, payload.sql, payload.limit)
+  })
+
   // AI Agent Fetch Models
   ipcMain.handle('agent:get-models', async () => {
     return aiAgentService.fetchAvailableModels()
@@ -740,6 +785,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle('db:execute-query', async (_event, sql: string, params?: any[]) => {
     return databaseService.executeQuery(sql, params)
   })
+
 }
 
 app.whenReady().then(async () => {

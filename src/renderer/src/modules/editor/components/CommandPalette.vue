@@ -3,9 +3,13 @@ import { ref, computed, watch, nextTick } from 'vue'
 import Dialog from 'primevue/dialog'
 import { useWorkspaceStore } from '@renderer/stores/workspaceStore'
 import { useAgentStore } from '@renderer/stores/agentStore'
+import { useSettingsStore } from '@renderer/stores/settingsStore'
+import { usePluginStore } from '@renderer/stores/pluginStore'
 
 const workspaceStore = useWorkspaceStore()
 const agentStore = useAgentStore()
+const settingsStore = useSettingsStore()
+const pluginStore = usePluginStore()
 
 const searchKeyword = ref('')
 const selectedIndex = ref(0)
@@ -22,6 +26,17 @@ interface CommandItem {
 
 const commandList: CommandItem[] = [
   {
+    id: 'cmd-open-settings',
+    title: 'Buka Pengaturan (Settings)...',
+    category: 'Preferensi',
+    icon: 'i-lucide-settings',
+    shortcut: 'Ctrl+,',
+    action: () => {
+      workspaceStore.isCommandPaletteVisible = false
+      settingsStore.openSettings()
+    }
+  },
+  {
     id: 'cmd-quick-open',
     title: 'Cari Berkas pada Project...',
     category: 'Navigasi',
@@ -30,6 +45,17 @@ const commandList: CommandItem[] = [
     action: () => {
       workspaceStore.isCommandPaletteVisible = false
       workspaceStore.isQuickOpenVisible = true
+    }
+  },
+  {
+    id: 'cmd-tab-switcher',
+    title: 'Pindah Tab Aktif (Tab Switcher)...',
+    category: 'Navigasi',
+    icon: 'i-lucide-arrow-left-right',
+    shortcut: 'Ctrl+Tab',
+    action: () => {
+      workspaceStore.isCommandPaletteVisible = false
+      workspaceStore.toggleTabSwitcher(true)
     }
   },
   {
@@ -190,6 +216,17 @@ const commandList: CommandItem[] = [
     }
   },
   {
+    id: 'cmd-plugin-manager',
+    title: 'Kelola Ekstensi & Plugin (Plugin Manager)...',
+    category: 'Ekstensi',
+    icon: 'i-lucide-puzzle',
+    shortcut: 'Ctrl+Shift+X',
+    action: () => {
+      workspaceStore.isCommandPaletteVisible = false
+      pluginStore.isPluginManagerOpen = true
+    }
+  },
+  {
     id: 'cmd-agent-history',
     title: 'Buka Riwayat Obrolan AI...',
     category: 'AI Assistant',
@@ -205,10 +242,27 @@ const commandList: CommandItem[] = [
   }
 ]
 
+const allAvailableCommands = computed<CommandItem[]>(() => {
+  const pluginCmds: CommandItem[] = pluginStore.allRegisteredCommandsList.map((pCmd) => ({
+    id: pCmd.id,
+    title: pCmd.title,
+    category: pCmd.category || 'Plugin',
+    icon: pCmd.icon || 'i-lucide-puzzle',
+    shortcut: pCmd.shortcut,
+    action: () => {
+      workspaceStore.isCommandPaletteVisible = false
+      pluginStore.executeCommand(pCmd.id)
+    }
+  }))
+
+  return [...commandList, ...pluginCmds]
+})
+
 const filteredCommandList = computed(() => {
-  if (!searchKeyword.value.trim()) return commandList
+  const list = allAvailableCommands.value
+  if (!searchKeyword.value.trim()) return list
   const lowerKeyword = searchKeyword.value.toLowerCase()
-  return commandList.filter(
+  return list.filter(
     (command) =>
       command.title.toLowerCase().includes(lowerKeyword) ||
       command.category.toLowerCase().includes(lowerKeyword)

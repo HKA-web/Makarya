@@ -1,3 +1,9 @@
+import { usePluginStore } from '@renderer/stores/pluginStore'
+import { resolveStudioIcon } from '../../../../packages/makarya-sdk/examples/theme-studio-icons/src/index'
+
+/**
+ * Detect Monaco Editor Language ID from file path
+ */
 export function detectMonacoLanguage(filePath: string): string {
   const extensionMatch = filePath.match(/\.([^.]+)$/)
   if (!extensionMatch) return 'plaintext'
@@ -52,66 +58,46 @@ export function detectMonacoLanguage(filePath: string): string {
   }
 }
 
-export function getNuxtFileIcon(fileName: string, isDirectory: boolean): { icon: string; colorClass: string } {
-  if (isDirectory) {
-    return { icon: 'i-lucide-folder', colorClass: 'text-amber-400' }
-  }
-
-  const extensionMatch = fileName.match(/\.([^.]+)$/)
-  if (!extensionMatch) {
-    return { icon: 'i-lucide-file', colorClass: 'text-slate-400' }
-  }
-
-  const ext = extensionMatch[1].toLowerCase()
-  switch (ext) {
-    case 'vue':
-      return { icon: 'i-lucide-code-2', colorClass: 'text-emerald-400' }
-    case 'ts':
-    case 'mts':
-    case 'cts':
-      return { icon: 'i-lucide-file-code-2', colorClass: 'text-sky-400' }
-    case 'js':
-    case 'mjs':
-    case 'cjs':
-      return { icon: 'i-lucide-file-code-2', colorClass: 'text-yellow-400' }
-    case 'php':
-    case 'phtml':
-      return { icon: 'i-lucide-file-code', colorClass: 'text-indigo-400' }
-    case 'json':
-      return { icon: 'i-lucide-braces', colorClass: 'text-amber-300' }
-    case 'md':
-    case 'markdown':
-      return { icon: 'i-lucide-file-text', colorClass: 'text-blue-400' }
-    case 'css':
-    case 'scss':
-    case 'less':
-      return { icon: 'i-lucide-palette', colorClass: 'text-cyan-400' }
-    case 'html':
-    case 'htm':
-      return { icon: 'i-lucide-globe', colorClass: 'text-orange-400' }
-    case 'sql':
-      return { icon: 'i-lucide-database', colorClass: 'text-rose-400' }
-    case 'py':
-      return { icon: 'i-lucide-file-code', colorClass: 'text-emerald-300' }
-    case 'yml':
-    case 'yaml':
-    case 'env':
-    case 'ini':
-      return { icon: 'i-lucide-settings', colorClass: 'text-purple-400' }
-    case 'svg':
-    case 'png':
-    case 'jpg':
-    case 'jpeg':
-    case 'webp':
-      return { icon: 'i-lucide-image', colorClass: 'text-pink-400' }
-    case 'git':
-    case 'gitignore':
-      return { icon: 'i-lucide-git-branch', colorClass: 'text-orange-500' }
-    default:
-      return { icon: 'i-lucide-file', colorClass: 'text-slate-400' }
+function isStudioPalettePluginEnabled(): boolean {
+  try {
+    const store = usePluginStore()
+    const plugin = store.installedPlugins.get('makarya.builtin.theme-customizer')
+    return plugin ? plugin.enabled : true
+  } catch {
+    return true
   }
 }
 
+/**
+ * Resolve icon definition for file tree node.
+ * Uses Studio Palette plugin when active, otherwise gracefully falls back to minimal default icons.
+ */
+export function getNuxtFileIcon(
+  fileName: string,
+  isDirectory: boolean,
+  isExpanded = false
+): { icon: string; colorClass: string } {
+  if (isStudioPalettePluginEnabled()) {
+    return resolveStudioIcon(fileName, isDirectory, isExpanded)
+  }
+
+  // Graceful minimal default fallback
+  if (isDirectory) {
+    return {
+      icon: isExpanded ? 'i-lucide-folder-open' : 'i-lucide-folder',
+      colorClass: 'text-slate-400'
+    }
+  }
+
+  return {
+    icon: 'i-lucide-file',
+    colorClass: 'text-slate-400'
+  }
+}
+
+/**
+ * Legacy PrimeIcons fallback helper
+ */
 export function getFileIconClass(fileName: string, isDirectory: boolean): string {
   if (isDirectory) return 'pi pi-folder text-amber-400'
 
@@ -141,4 +127,3 @@ export function getFileIconClass(fileName: string, isDirectory: boolean): string
       return 'pi pi-file text-zinc-400'
   }
 }
-

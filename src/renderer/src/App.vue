@@ -1,20 +1,55 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import Toast from 'primevue/toast'
 import ConfirmDialog from 'primevue/confirmdialog'
 import { useToast } from 'primevue/usetoast'
 import { useWorkspaceStore } from './stores/workspaceStore'
 import { useSettingsStore } from './stores/settingsStore'
 import { useAgentStore } from './stores/agentStore'
+import { usePluginStore } from './stores/pluginStore'
 import { ModularAppContainer, useProductionRegistry } from './modules'
+import { globalPluginEvents } from './sdk/runtime'
 import AboutModal from './modules/editor/components/AboutModal.vue'
+import SettingsModal from './modules/editor/components/SettingsModal.vue'
+import PluginManagerModal from './modules/editor/components/PluginManagerModal.vue'
+import DatabaseConnectionModal from './modules/editor/components/DatabaseConnectionModal.vue'
 import iconImg from './assets/icon.jpg'
 
 const workspaceStore = useWorkspaceStore()
 const settingsStore = useSettingsStore()
 const agentStore = useAgentStore()
+const pluginStore = usePluginStore()
 const toast = useToast()
 const { activeModule } = useProductionRegistry()
+
+const activeFilePath = computed(() => {
+  if (workspaceStore.activeTab?.filePath) {
+    return workspaceStore.activeTab.filePath
+  }
+  if (workspaceStore.activeTab?.title && workspaceStore.activeTab.tabType !== 'welcome') {
+    return workspaceStore.activeTab.title
+  }
+  return 'Makarya Ready'
+})
+
+watch(
+  () => workspaceStore.activeTab,
+  (tab) => {
+    if (tab) {
+      globalPluginEvents.emit('workspace:did-change-active-tab', {
+        id: tab.id,
+        title: tab.title,
+        filePath: tab.filePath,
+        content: tab.content,
+        isDirty: tab.isDirty,
+        language: tab.language
+      })
+    } else {
+      globalPluginEvents.emit('workspace:did-change-active-tab', null)
+    }
+  },
+  { immediate: true }
+)
 
 const isWindowMaximized = ref(false)
 let cleanupWindowStateListener: (() => void) | null = null
@@ -49,6 +84,15 @@ async function handleGlobalKeyboard(event: KeyboardEvent): Promise<void> {
   } else if (isModifier && event.shiftKey && event.key.toLowerCase() === 'n') {
     event.preventDefault()
     workspaceStore.toggleWindowSwitcher()
+  } else if (isModifier && event.key === ',') {
+    event.preventDefault()
+    settingsStore.openSettings()
+  } else if (isModifier && event.shiftKey && event.key.toLowerCase() === 'x') {
+    event.preventDefault()
+    pluginStore.isPluginManagerOpen = !pluginStore.isPluginManagerOpen
+  } else if (isModifier && event.key.toLowerCase() === 'w') {
+    event.preventDefault()
+    workspaceStore.closeTab(workspaceStore.activeTabId)
   }
 }
 
@@ -69,12 +113,32 @@ onMounted(async () => {
     })
   }
 
-  // Restore workspace roots, settings, and agent models on startup
+  // Restore workspace roots, settings, agent models, and plugins on startup
+  pluginStore.setUiHandlers(
+    (opts) => {
+      toast.add({
+        severity: (opts.type === 'error' ? 'error' : opts.type === 'warn' ? 'warn' : opts.type === 'success' ? 'success' : 'info') as any,
+        summary: opts.title || 'Ekstensi Makarya',
+        detail: opts.message,
+        life: opts.duration || 3000
+      })
+    },
+    (opts) => {
+      if (window.confirm(`${opts.title}\n\n${opts.message}`)) {
+        opts.onAccept?.()
+      } else {
+        opts.onReject?.()
+      }
+    }
+  )
+
   await Promise.all([
     workspaceStore.loadWorkspaceRootsFromStorage(),
     settingsStore.loadSettingsFromDb(),
     agentStore.loadModels()
   ])
+
+  pluginStore.registerBuiltinPlugins()
 })
 
 onUnmounted(() => {
@@ -190,30 +254,68 @@ async function handleMenuAddWorkspace(): Promise<void> {
       <!-- Bottom Status Bar -->
       <footer class="h-6 bg-[#090d15] border-t border-white/[0.06] flex items-center justify-between px-3 text-[11px] text-slate-400 font-mono flex-shrink-0">
         <div class="flex items-center gap-3">
-          <div class="flex items-center gap-1.5 text-[#42b883] select-none">
+          <div
+            class="flex items-center gap-1.5 text-[#42b883] select-none max-w-md sm:max-w-xl lg:max-w-2xl truncate"
+            :title="workspaceStore.activeTab?.filePath || 'Makarya Ready'"
+          >
             <span class="w-1.5 h-1.5 rounded-full bg-[#42b883] vue-pulse-dot flex-shrink-0 -translate-y-[0.5px]"></span>
-            <span class="font-medium text-[11px] leading-none">Makarya Ready</span>
+            <span class="font-medium text-[11px] leading-none truncate font-mono">
+              {{ activeFilePath }}
+            </span>
           </div>
 
-          <span class="text-slate-500">•</span>
-
-          <span class="text-slate-300 font-sans text-[11px]">
-            Modul Aktif: <b class="text-[#42b883] font-semibold">{{ activeModule?.manifest.name || 'Selamat Datang' }}</b>
-          </span>
-
-          <span v-if="workspaceStore.workspaceRoots.length > 0" class="truncate max-w-xs text-slate-500 text-[10px]">
-            ({{ workspaceStore.workspaceRoots[0].path }})
-          </span>
+          <!-- Plugin Contributed Left Status Bar Items -->
+          <div
+            v-for="item in pluginStore.activeStatusBarItems.filter(i => i.alignment !== 'right')"
+            :key="item.id"
+            class="flex items-center gap-2"
+          >
+            <span class="text-slate-600">•</span>
+            <button
+              @click="item.command && pluginStore.executeCommand(item.command)"
+              :title="item.tooltip"
+              class="hover:text-white transition-colors cursor-pointer flex items-center gap-1.5 font-mono text-[10.5px]"
+              :style="{ color: item.color || undefined }"
+            >
+              <UIcon v-if="item.icon" :name="item.icon" class="size-3.5" />
+              <span>{{ item.text }}</span>
+            </button>
+          </div>
         </div>
 
         <div class="flex items-center gap-3 text-[11px]">
-          <span>Engine: <b class="text-slate-300 font-semibold">Modular Plugin</b></span>
+          <!-- Plugin Contributed Right Status Bar Items -->
+          <button
+            v-for="item in pluginStore.activeStatusBarItems.filter(i => i.alignment === 'right')"
+            :key="item.id"
+            @click="item.command && pluginStore.executeCommand(item.command)"
+            :title="item.tooltip"
+            class="hover:text-white transition-colors cursor-pointer flex items-center gap-1.5 font-mono text-[10.5px]"
+            :style="{ color: item.color || undefined }"
+          >
+            <UIcon v-if="item.icon" :name="item.icon" class="size-3.5 text-slate-400" />
+            <span>{{ item.text }}</span>
+          </button>
+
+          <!-- Extension Manager Quick Link -->
+          <button
+            @click="pluginStore.isPluginManagerOpen = true"
+            class="hover:text-[#42b883] transition-colors cursor-pointer flex items-center gap-1 font-sans text-[11px]"
+            title="Buka Plugin & Extension Manager"
+          >
+            <UIcon name="i-lucide-puzzle" class="size-3 text-[#42b883]" />
+            <span>{{ pluginStore.activePlugins.length }} Plugin</span>
+          </button>
+
           <span>Window: <b class="text-[#42b883]">Active</b></span>
         </div>
       </footer>
 
       <!-- Global Modals & Services -->
       <AboutModal v-model:visible="workspaceStore.isAboutModalOpen" />
+      <SettingsModal />
+      <PluginManagerModal />
+      <DatabaseConnectionModal />
       <Toast position="bottom-right" />
       <ConfirmDialog />
     </div>

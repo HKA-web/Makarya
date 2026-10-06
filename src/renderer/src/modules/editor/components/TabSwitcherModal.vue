@@ -53,10 +53,23 @@ function closeTab(tabId: string, event: MouseEvent): void {
 
 function formatFilePath(filePath?: string): string {
   if (!filePath) return 'Berkas Editor Baru'
+  const normFile = filePath.replace(/\\/g, '/').toLowerCase()
+  const matchingRoot = workspaceStore.workspaceRoots.find((r) => {
+    const normRoot = r.path.replace(/\\/g, '/').toLowerCase().replace(/\/$/, '')
+    return normFile.startsWith(normRoot + '/') || normFile === normRoot
+  })
+
+  if (matchingRoot) {
+    const normRoot = matchingRoot.path.replace(/\\/g, '/').replace(/\/$/, '')
+    const fileNorm = filePath.replace(/\\/g, '/')
+    const rel = fileNorm.slice(normRoot.length).replace(/^\//, '').replace(/\//g, '\\')
+    return rel ? `${matchingRoot.name} • ${rel}` : matchingRoot.name
+  }
+
   const normalized = filePath.replace(/\\/g, '/')
   const parts = normalized.split('/')
-  if (parts.length <= 3) return normalized
-  return '.../' + parts.slice(-3).join('/')
+  if (parts.length <= 3) return normalized.replace(/\//g, '\\')
+  return '...\\' + parts.slice(-3).join('\\')
 }
 
 // Watch ketika tab switcher terbuka
@@ -64,34 +77,46 @@ watch(
   () => workspaceStore.isTabSwitcherVisible,
   (visible) => {
     if (visible) {
-      // Jika ada 2 tab atau lebih, sorot tab index ke-1 (file yang baru saja dibuka sebelumnya seperti di VS Code / Antigravity)
       const len = tabsToDisplay.value.length
-      selectedIndex.value = len > 1 ? 1 : 0
+      if (selectedIndex.value >= len || selectedIndex.value < 0) {
+        selectedIndex.value = len > 1 ? 1 : 0
+      }
       scrollToSelected()
     }
   }
 )
 
 function handleKeyDown(event: KeyboardEvent): void {
-  if (!workspaceStore.isTabSwitcherVisible) return
-
   const isModifier = event.ctrlKey || event.metaKey
 
-  // Navigasi Tab saat Ctrl ditekan
+  // Ketika modal belum terbuka atau sudah terbuka, proses Ctrl+Tab / Ctrl+Shift+Tab
   if (isModifier && event.key === 'Tab') {
     event.preventDefault()
     event.stopPropagation()
-    const len = tabsToDisplay.value.length
-    if (len <= 1) return
 
-    if (event.shiftKey) {
-      selectedIndex.value = (selectedIndex.value - 1 + len) % len
+    const len = tabsToDisplay.value.length
+    if (len === 0) return
+
+    if (!workspaceStore.isTabSwitcherVisible) {
+      workspaceStore.toggleTabSwitcher(true)
+      if (event.shiftKey) {
+        selectedIndex.value = len > 1 ? len - 1 : 0
+      } else {
+        selectedIndex.value = len > 1 ? 1 : 0
+      }
     } else {
-      selectedIndex.value = (selectedIndex.value + 1) % len
+      if (event.shiftKey) {
+        selectedIndex.value = (selectedIndex.value - 1 + len) % len
+      } else {
+        selectedIndex.value = (selectedIndex.value + 1) % len
+      }
     }
     scrollToSelected()
     return
   }
+
+  // Jika modal switcher belum terbuka, abaikan tombol lainnya
+  if (!workspaceStore.isTabSwitcherVisible) return
 
   // Navigasi Arrow Keys
   if (event.key === 'ArrowDown') {
@@ -142,14 +167,22 @@ function handleKeyUp(event: KeyboardEvent): void {
   }
 }
 
+function handleBlur(): void {
+  if (workspaceStore.isTabSwitcherVisible) {
+    cancel()
+  }
+}
+
 onMounted(() => {
   window.addEventListener('keydown', handleKeyDown, true)
   window.addEventListener('keyup', handleKeyUp, true)
+  window.addEventListener('blur', handleBlur)
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeyDown, true)
   window.removeEventListener('keyup', handleKeyUp, true)
+  window.removeEventListener('blur', handleBlur)
 })
 </script>
 

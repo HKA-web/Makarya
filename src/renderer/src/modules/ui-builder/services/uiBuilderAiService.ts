@@ -1,6 +1,7 @@
 import type { OutputStack } from '../types'
 import { getSystemPrompt, buildUpdatePrompt } from './uiBuilderPrompts'
 import { useSettingsStore } from '../../../stores/settingsStore'
+import { useAgentStore } from '../../../stores/agentStore'
 
 /**
  * Memotong gambar berbasis koordinat normalisasi box2d [ymin, xmin, ymax, xmax] (0..1000) menggunakan HTML5 Canvas di browser
@@ -83,7 +84,13 @@ export async function streamUiCodeGeneration(
   callbacks: StreamGenerationCallbacks
 ): Promise<string> {
   const settingsStore = useSettingsStore()
-  const model = params.model || settingsStore.ai.defaultModel || 'gpt-4o'
+  const agentStore = useAgentStore()
+  const model =
+    (params.model && params.model !== 'default' && params.model !== 'gpt-4o' ? params.model : '') ||
+    (agentStore.selectedModel && agentStore.selectedModel !== 'default' ? agentStore.selectedModel : '') ||
+    (settingsStore.ai.defaultModel && settingsStore.ai.defaultModel !== 'default' ? settingsStore.ai.defaultModel : '') ||
+    (agentStore.availableModels.length > 0 ? agentStore.availableModels[0] : '') ||
+    'ag/gemini-3.6-flash-medium'
   const requestId = `ui-stream-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
 
   const systemPrompt = getSystemPrompt(params.stack)

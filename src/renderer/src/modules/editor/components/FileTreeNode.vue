@@ -73,8 +73,8 @@ function handleDragStart(event: DragEvent): void {
       <span v-else class="w-3 flex-shrink-0"></span>
 
       <UIcon
-        :name="entry.isDirectory ? (isExpanded ? 'i-lucide-folder-open' : 'i-lucide-folder') : getNuxtFileIcon(entry.name, false).icon"
-        :class="[getNuxtFileIcon(entry.name, entry.isDirectory).colorClass, 'size-3.5 flex-shrink-0']"
+        :name="getNuxtFileIcon(entry.name, entry.isDirectory, isExpanded).icon"
+        :class="[getNuxtFileIcon(entry.name, entry.isDirectory, isExpanded).colorClass, 'size-3.5 flex-shrink-0']"
       />
       
       <!-- Full name width, no buttons crowding the space -->

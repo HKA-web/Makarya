@@ -88,11 +88,46 @@ export interface ElectronAPI {
     }>
     projectRoot?: string
     autoExecution?: string
+    reviewPolicy?: string
+    customTools?: Array<{
+      name: string
+      description: string
+      parameters?: any
+      pluginId?: string
+    }>
   }) => Promise<{ accepted: boolean }>
   abortChatMessage: (requestId: string) => Promise<{ aborted: boolean }>
   respondToolApproval: (toolCallId: string, approved: boolean) => Promise<boolean>
+  respondCustomTool: (toolCallId: string, result: any) => Promise<boolean>
+  testDbConnection: (config: {
+    type: string
+    host: string
+    port?: number
+    database: string
+    username?: string
+    password?: string
+    authType?: string
+  }) => Promise<{ success: boolean; latencyMs?: number; message?: string; error?: string }>
+  inspectDbSchema: (config: any) => Promise<{
+    success: boolean
+    database: string
+    dbType: string
+    tableCount: number
+    tables: Array<{ name: string; schema?: string; columns: Array<{ name: string; type: string; isNullable?: boolean; isPrimary?: boolean; defaultValue?: string }> }>
+    message?: string
+    error?: string
+  }>
+  executeDbLiveQuery: (payload: { config: any; sql: string; limit?: number }) => Promise<{
+    success: boolean
+    rowCount: number
+    columns: string[]
+    rows: any[]
+    durationMs: number
+    error?: string
+  }>
   fetchAvailableModels: () => Promise<string[]>
   onAgentToolRequireApproval: (callback: (data: { requestId: string; toolCallId: string; toolName: string; args: any }) => void) => () => void
+  onAgentExecuteCustomTool: (callback: (data: { requestId: string; toolCallId: string; toolName: string; args: any }) => void) => () => void
   onAgentStreamToken: (callback: (data: { requestId: string; deltaContent: string }) => void) => () => void
   onAgentThought: (callback: (data: { requestId: string; deltaThought: string }) => void) => () => void
   onAgentToolStart: (callback: (data: ToolStartEventPayload) => void) => () => void
@@ -129,6 +164,7 @@ export interface ElectronAPI {
   killTerminal: (payload: { id: string }) => Promise<{ success: boolean }>
   onTerminalData: (callback: (payload: { id: string; data: string }) => void) => () => void
   onTerminalExit: (callback: (payload: { id: string; exitCode: number }) => void) => () => void
+
 }
 
 declare global {
