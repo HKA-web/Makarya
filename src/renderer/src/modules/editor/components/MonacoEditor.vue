@@ -216,6 +216,30 @@ function getHunkAtCursor(): string | null {
   return closestHunk.id
 }
 
+function jumpToNextHunk(): void {
+  if (!editorInstance || !diffData.value || diffData.value.hunks.length === 0) return
+  const currentLine = editorInstance.getPosition()?.lineNumber || 1
+  const nextHunk = diffData.value.hunks.find((h) => h.actionLine > currentLine) || diffData.value.hunks[0]
+  if (nextHunk) {
+    editorInstance.revealLineInCenter(nextHunk.actionLine)
+    editorInstance.setPosition({ lineNumber: nextHunk.actionLine, column: 1 })
+    editorInstance.focus()
+  }
+}
+
+function jumpToPrevHunk(): void {
+  if (!editorInstance || !diffData.value || diffData.value.hunks.length === 0) return
+  const currentLine = editorInstance.getPosition()?.lineNumber || 1
+  const prevHunk =
+    [...diffData.value.hunks].reverse().find((h) => h.actionLine < currentLine) ||
+    diffData.value.hunks[diffData.value.hunks.length - 1]
+  if (prevHunk) {
+    editorInstance.revealLineInCenter(prevHunk.actionLine)
+    editorInstance.setPosition({ lineNumber: prevHunk.actionLine, column: 1 })
+    editorInstance.focus()
+  }
+}
+
 function registerCustomThemes(): void {
   monaco.editor.defineTheme('makarya-dark', {
     base: 'vs-dark',
@@ -513,7 +537,8 @@ onMounted(() => {
     }
   })
 
-  // Register keyboard shortcuts: Alt+Enter for Accept current hunk, Shift+Alt+Backspace for Reject current hunk
+  // Register keyboard shortcuts:
+  // Alt+Enter for Accept current hunk, Shift+Alt+Backspace for Reject current hunk
   editorInstance.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.Enter, () => {
     if (isDiffActive.value) {
       const hunkId = getHunkAtCursor()
@@ -538,6 +563,20 @@ onMounted(() => {
       }
     }
   )
+
+  // Ctrl+Enter / Cmd+Enter: Accept All changes in current file
+  editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
+    if (isDiffActive.value) {
+      handleAcceptDiff()
+    }
+  })
+
+  // Ctrl+Backspace / Cmd+Backspace: Reject All changes in current file
+  editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Backspace, () => {
+    if (isDiffActive.value) {
+      handleRejectDiff()
+    }
+  })
 
   // Register Ctrl+L to tag selected code into Copilot Agent Chat
   editorInstance.addAction({
@@ -766,7 +805,7 @@ onUnmounted(() => {
     <!-- Monaco Editor Mounting Container -->
     <div ref="editorContainerRef" class="w-full h-full"></div>
 
-    <!-- Floating Diff Action Pills (Accept / Reject) -->
+    <!-- Floating Diff Action Pills (Accept / Reject per hunk) -->
     <template v-if="isDiffActive">
       <div
         v-for="hunk in hunkPositions"
@@ -799,6 +838,67 @@ onUnmounted(() => {
         <span class="text-zinc-500 hover:text-zinc-300 px-1 cursor-default text-[10px] flex items-center">
           <UIcon name="i-lucide-maximize-2" class="size-2.5 text-zinc-400" />
         </span>
+      </div>
+
+      <!-- Antigravity Global Floating Accept All / Reject All Action Bar -->
+      <div
+        v-if="diffData && diffData.hunks.length > 0"
+        class="antigravity-floating-diff-bar select-none animate-in fade-in slide-in-from-bottom-3 duration-200"
+      >
+        <!-- Diff Stats & Info Pill -->
+        <div class="flex items-center gap-2 pr-2.5 border-r border-white/10 text-[11px]">
+          <span class="size-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span class="font-bold text-slate-100">
+            {{ diffData.hunks.length }} {{ diffData.hunks.length === 1 ? 'change' : 'changes' }}
+          </span>
+          <div class="flex items-center gap-1 font-mono text-[10px] pl-0.5">
+            <span v-if="diffData.addedLineNumbers.length > 0" class="text-emerald-400 font-bold">+{{ diffData.addedLineNumbers.length }}</span>
+            <span v-if="diffData.removedLineNumbers.length > 0" class="text-rose-400 font-bold">-{{ diffData.removedLineNumbers.length }}</span>
+          </div>
+        </div>
+
+        <!-- Navigation Jump Buttons -->
+        <div class="flex items-center gap-0.5 px-1.5 border-r border-white/10">
+          <button
+            @click.stop="jumpToPrevHunk"
+            class="w-6 h-6 rounded-md hover:bg-white/10 flex items-center justify-center text-slate-400 hover:text-white transition-colors cursor-pointer"
+            title="Perubahan Sebelumnya (Prev Change)"
+          >
+            <UIcon name="i-lucide-chevron-up" class="size-3.5" />
+          </button>
+          <button
+            @click.stop="jumpToNextHunk"
+            class="w-6 h-6 rounded-md hover:bg-white/10 flex items-center justify-center text-slate-400 hover:text-white transition-colors cursor-pointer"
+            title="Perubahan Berikutnya (Next Change)"
+          >
+            <UIcon name="i-lucide-chevron-down" class="size-3.5" />
+          </button>
+        </div>
+
+        <!-- Action Buttons: Reject All & Accept All -->
+        <div class="flex items-center gap-2 pl-1">
+          <!-- Reject All -->
+          <button
+            @click.stop="handleRejectDiff"
+            class="antigravity-diff-btn-reject"
+            title="Tolak semua perubahan di file ini (Ctrl + Backspace)"
+          >
+            <UIcon name="i-lucide-undo-2" class="size-3.5" />
+            <span>Reject All</span>
+            <span class="antigravity-kbd">Ctrl+⌫</span>
+          </button>
+
+          <!-- Accept All -->
+          <button
+            @click.stop="handleAcceptDiff"
+            class="antigravity-diff-btn-accept"
+            title="Terima semua perubahan di file ini (Ctrl + Enter)"
+          >
+            <UIcon name="i-lucide-check-check" class="size-3.5" />
+            <span>Accept All</span>
+            <span class="antigravity-kbd">Ctrl+↵</span>
+          </button>
+        </div>
       </div>
     </template>
   </div>
@@ -879,6 +979,89 @@ onUnmounted(() => {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   background: rgba(0, 0, 0, 0.22);
   padding: 1px 5px;
+  border-radius: 9999px;
+  letter-spacing: -0.02em;
+}
+
+/* Antigravity Global Floating Review Toolbar (Bottom-Right) */
+.antigravity-floating-diff-bar {
+  position: absolute;
+  bottom: 22px;
+  right: 28px;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(10, 15, 26, 0.96);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(66, 184, 131, 0.35);
+  border-radius: 14px;
+  padding: 5px 10px;
+  box-shadow: 0 10px 35px rgba(0, 0, 0, 0.8), 0 0 20px rgba(66, 184, 131, 0.18);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  line-height: 1.2;
+}
+
+/* Antigravity Accept All Button (Glowing Emerald Gradient Pill) */
+.antigravity-diff-btn-accept {
+  background: linear-gradient(135deg, #42b883, #10b981);
+  color: #090d14;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4.5px 12px;
+  border-radius: 9999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(66, 184, 131, 0.45);
+  transition: all 140ms ease;
+}
+
+.antigravity-diff-btn-accept:hover {
+  background: linear-gradient(135deg, #34d399, #059669);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(66, 184, 131, 0.65);
+}
+
+.antigravity-diff-btn-accept:active {
+  transform: scale(0.96);
+}
+
+/* Antigravity Reject All Button (Sleek Rose Pill) */
+.antigravity-diff-btn-reject {
+  background: rgba(244, 63, 94, 0.14);
+  color: #fda4af;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4.5px 11px;
+  border-radius: 9999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(244, 63, 94, 0.32);
+  cursor: pointer;
+  transition: all 140ms ease;
+}
+
+.antigravity-diff-btn-reject:hover {
+  background: rgba(244, 63, 94, 0.26);
+  color: #ffffff;
+  border-color: rgba(244, 63, 94, 0.6);
+  transform: translateY(-1px);
+}
+
+.antigravity-diff-btn-reject:active {
+  transform: scale(0.96);
+}
+
+/* Antigravity Kbd Badge inside buttons */
+.antigravity-kbd {
+  font-size: 9.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  background: rgba(0, 0, 0, 0.3);
+  padding: 1.5px 5.5px;
   border-radius: 9999px;
   letter-spacing: -0.02em;
 }

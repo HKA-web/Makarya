@@ -140,6 +140,30 @@ const makaryaAPI = {
     ipcRenderer.invoke('claude:session-load', sessionId),
   deleteClaudeSession: (sessionId: string): Promise<boolean> =>
     ipcRenderer.invoke('claude:session-delete', sessionId),
+  gitGetStatus: (projectPath: string): Promise<any> =>
+    ipcRenderer.invoke('git:get-status', projectPath),
+  gitStage: (projectPath: string, filePath: string): Promise<boolean> =>
+    ipcRenderer.invoke('git:stage', projectPath, filePath),
+  gitStageAll: (projectPath: string): Promise<boolean> =>
+    ipcRenderer.invoke('git:stage-all', projectPath),
+  gitUnstage: (projectPath: string, filePath: string): Promise<boolean> =>
+    ipcRenderer.invoke('git:unstage', projectPath, filePath),
+  gitUnstageAll: (projectPath: string): Promise<boolean> =>
+    ipcRenderer.invoke('git:unstage-all', projectPath),
+  gitDiscard: (projectPath: string, filePath: string, isUntracked?: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('git:discard', projectPath, filePath, isUntracked),
+  gitDiscardAll: (projectPath: string): Promise<boolean> =>
+    ipcRenderer.invoke('git:discard-all', projectPath),
+  gitCommit: (projectPath: string, message: string): Promise<{ success: boolean; hash?: string; error?: string }> =>
+    ipcRenderer.invoke('git:commit', projectPath, message),
+  gitGetDiff: (projectPath: string, filePath: string, staged?: boolean): Promise<{ originalContent: string; newContent: string }> =>
+    ipcRenderer.invoke('git:get-diff', projectPath, filePath, staged),
+  gitGenerateCommitMsg: (projectPath: string, model?: string): Promise<string> =>
+    ipcRenderer.invoke('git:generate-commit-msg', projectPath, model),
+  gitPush: (projectPath: string): Promise<{ success: boolean; message?: string; error?: string }> =>
+    ipcRenderer.invoke('git:push', projectPath),
+  gitPull: (projectPath: string): Promise<{ success: boolean; message?: string; error?: string }> =>
+    ipcRenderer.invoke('git:pull', projectPath),
   abortChatMessage: (requestId: string): Promise<{ aborted: boolean }> =>
     ipcRenderer.invoke('agent:chat-abort', requestId),
   respondToolApproval: (toolCallId: string, approved: boolean): Promise<boolean> =>

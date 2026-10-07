@@ -9,6 +9,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { VercelAiAgentService as AiAgentService } from './agent/vercelAiService'
 import { OpenCodeCliService } from './agent/openCodeCliService'
 import { ClaudeCliService } from './agent/claudeCliService'
+import { GitService } from './git/gitService'
 import { uiBuilderService } from './agent/uiBuilderService'
 import { databaseService } from './db/databaseService'
 import { liveDatabaseDriverService } from './db/liveDbDriver'
@@ -20,6 +21,7 @@ const activeBrowserWindows = new Set<BrowserWindow>()
 const aiAgentService = new AiAgentService()
 const openCodeCliService = new OpenCodeCliService(aiAgentService)
 const claudeCliService = new ClaudeCliService(aiAgentService)
+const gitService = new GitService(aiAgentService)
 
 interface RunningProcessInfo {
   appId: string
@@ -774,6 +776,55 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('claude:session-delete', async (_event, sessionId: string) => {
     return claudeCliService.deleteSession(sessionId)
+  })
+
+  // Git / Source Control Handlers
+  ipcMain.handle('git:get-status', async (_event, projectPath: string) => {
+    return gitService.getStatus(projectPath)
+  })
+
+  ipcMain.handle('git:stage', async (_event, projectPath: string, filePath: string) => {
+    return gitService.stageFile(projectPath, filePath)
+  })
+
+  ipcMain.handle('git:stage-all', async (_event, projectPath: string) => {
+    return gitService.stageAll(projectPath)
+  })
+
+  ipcMain.handle('git:unstage', async (_event, projectPath: string, filePath: string) => {
+    return gitService.unstageFile(projectPath, filePath)
+  })
+
+  ipcMain.handle('git:unstage-all', async (_event, projectPath: string) => {
+    return gitService.unstageAll(projectPath)
+  })
+
+  ipcMain.handle('git:discard', async (_event, projectPath: string, filePath: string, isUntracked = false) => {
+    return gitService.discardFile(projectPath, filePath, isUntracked)
+  })
+
+  ipcMain.handle('git:discard-all', async (_event, projectPath: string) => {
+    return gitService.discardAll(projectPath)
+  })
+
+  ipcMain.handle('git:commit', async (_event, projectPath: string, message: string) => {
+    return gitService.commit(projectPath, message)
+  })
+
+  ipcMain.handle('git:get-diff', async (_event, projectPath: string, filePath: string, staged = false) => {
+    return gitService.getFileDiff(projectPath, filePath, staged)
+  })
+
+  ipcMain.handle('git:generate-commit-msg', async (_event, projectPath: string, model?: string) => {
+    return gitService.generateAiCommitMessage(projectPath, model)
+  })
+
+  ipcMain.handle('git:push', async (_event, projectPath: string) => {
+    return gitService.push(projectPath)
+  })
+
+  ipcMain.handle('git:pull', async (_event, projectPath: string) => {
+    return gitService.pull(projectPath)
   })
 
   // UI Builder Streaming Generation (9router & Multimodal)

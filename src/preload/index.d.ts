@@ -127,6 +127,27 @@ export interface ElectronAPI {
   fetchClaudeSessions: () => Promise<Array<{ id: string; title: string; updated?: string; dateGroup?: string; timestamp?: number; subtitle?: string; isPinned?: boolean }>>
   loadClaudeSession: (sessionId: string) => Promise<{ id: string; title: string; messages: any[] } | null>
   deleteClaudeSession: (sessionId: string) => Promise<boolean>
+  gitGetStatus: (projectPath: string) => Promise<{
+    isGitRepo: boolean
+    branch: string
+    ahead: number
+    behind: number
+    staged: Array<{ path: string; status: string; statusCode: string; oldPath?: string; isStaged: boolean }>
+    unstaged: Array<{ path: string; status: string; statusCode: string; oldPath?: string; isStaged: boolean }>
+    untracked: Array<{ path: string; status: string; statusCode: string; isStaged: boolean }>
+    totalChanges: number
+  }>
+  gitStage: (projectPath: string, filePath: string) => Promise<boolean>
+  gitStageAll: (projectPath: string) => Promise<boolean>
+  gitUnstage: (projectPath: string, filePath: string) => Promise<boolean>
+  gitUnstageAll: (projectPath: string) => Promise<boolean>
+  gitDiscard: (projectPath: string, filePath: string, isUntracked?: boolean) => Promise<boolean>
+  gitDiscardAll: (projectPath: string) => Promise<boolean>
+  gitCommit: (projectPath: string, message: string) => Promise<{ success: boolean; hash?: string; error?: string }>
+  gitGetDiff: (projectPath: string, filePath: string, staged?: boolean) => Promise<{ originalContent: string; newContent: string }>
+  gitGenerateCommitMsg: (projectPath: string, model?: string) => Promise<string>
+  gitPush: (projectPath: string) => Promise<{ success: boolean; message?: string; error?: string }>
+  gitPull: (projectPath: string) => Promise<{ success: boolean; message?: string; error?: string }>
   abortChatMessage: (requestId: string) => Promise<{ aborted: boolean }>
   respondToolApproval: (toolCallId: string, approved: boolean) => Promise<boolean>
   respondCustomTool: (toolCallId: string, result: any) => Promise<boolean>

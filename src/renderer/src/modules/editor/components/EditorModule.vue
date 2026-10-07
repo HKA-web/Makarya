@@ -5,6 +5,7 @@ import { useSettingsStore } from '@renderer/stores/settingsStore'
 import { usePluginStore } from '@renderer/stores/pluginStore'
 import MonacoEditor from './MonacoEditor.vue'
 import FileExplorer from './FileExplorer.vue'
+import SourceControlPanel from './SourceControlPanel.vue'
 import AgentPanel from './AgentPanel.vue'
 import OpenCodePanel from './OpenCodePanel.vue'
 import ClaudePanel from './ClaudePanel.vue'
@@ -18,10 +19,12 @@ import { getNuxtFileIcon } from '@renderer/utils/languageDetector'
 import logoImg from '@renderer/assets/logo.png'
 import openCodeLogo from '@renderer/assets/opencode-logo.png'
 import claudeLogo from '@renderer/assets/claude-logo.svg'
+import { useGitStore } from '@renderer/stores/gitStore'
 
 const workspaceStore = useWorkspaceStore()
 const settingsStore = useSettingsStore()
 const pluginStore = usePluginStore()
+const gitStore = useGitStore()
 
 const activeHeaderMenu = ref<'file' | 'help' | null>(null)
 
@@ -113,6 +116,7 @@ function handleCloseAllTabs(): void {
 
 onMounted(() => {
   window.addEventListener('click', handleWindowClick)
+  gitStore.refreshStatus()
   if (typeof workspaceStore.deduplicateTabs === 'function') {
     workspaceStore.deduplicateTabs()
   } else if (Array.isArray(workspaceStore.tabList)) {
@@ -330,20 +334,30 @@ onUnmounted(() => {
             </svg>
           </button>
 
-          <!-- 3. Toggle Panel AI Agent Kanan -->
+          <!-- 3. Toggle Panel Source Control Kanan (Top-Right Button) -->
           <button
-            @click="workspaceStore.toggleCopilotPanel"
-            class="w-6.5 h-6.5 rounded-md flex items-center justify-center transition-all cursor-pointer"
-            :class="workspaceStore.isCopilotPanelOpen
+            @click="
+              workspaceStore.toggleSourceControlPanel();
+              if (workspaceStore.isSourceControlPanelOpen) {
+                gitStore.refreshStatus();
+              }
+            "
+            class="w-6.5 h-6.5 rounded-md flex items-center justify-center transition-all cursor-pointer relative"
+            :class="workspaceStore.isSourceControlPanelOpen
               ? 'bg-white/[0.12] text-slate-100 shadow-xs border border-white/[0.08]'
               : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04]'"
-            title="Toggle Panel AI Agent (Ctrl+B)"
+            title="Toggle Source Control (Git Changes & Commit)"
           >
             <svg viewBox="0 0 16 16" fill="none" class="size-3.5" xmlns="http://www.w3.org/2000/svg">
               <rect x="2" y="2" width="12" height="12" rx="1.5" stroke="currentColor" stroke-width="1.2" />
-              <path v-if="workspaceStore.isCopilotPanelOpen" d="M10 2H12.5C13.3284 2 14 2.67157 14 3.5V12.5C14 13.3284 13.3284 14 12.5 14H10V2Z" fill="currentColor" />
+              <path v-if="workspaceStore.isSourceControlPanelOpen" d="M10 2H12.5C13.3284 2 14 2.67157 14 3.5V12.5C14 13.3284 13.3284 14 12.5 14H10V2Z" fill="currentColor" />
               <line v-else x1="10" y1="2" x2="10" y2="14" stroke="currentColor" stroke-width="1.2" />
             </svg>
+            <!-- Git Changes Badge Dot on Header Button -->
+            <span
+              v-if="gitStore.totalChanges > 0"
+              class="absolute -top-0.5 -right-0.5 size-2 bg-emerald-400 rounded-full ring-2 ring-[#0b101b] animate-pulse"
+            ></span>
           </button>
         </div>
       </div>
@@ -565,6 +579,9 @@ onUnmounted(() => {
 
       <!-- Claude Autonomous Agent Panel -->
       <ClaudePanel v-show="workspaceStore.isClaudePanelOpen" />
+
+      <!-- Source Control Right Panel (Git GUI) -->
+      <SourceControlPanel v-show="workspaceStore.isSourceControlPanelOpen" />
     </div>
 
     <!-- Editor Module Modals & Overlays -->
