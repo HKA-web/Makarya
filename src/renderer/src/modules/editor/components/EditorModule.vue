@@ -7,6 +7,7 @@ import MonacoEditor from './MonacoEditor.vue'
 import FileExplorer from './FileExplorer.vue'
 import AgentPanel from './AgentPanel.vue'
 import OpenCodePanel from './OpenCodePanel.vue'
+import ClaudePanel from './ClaudePanel.vue'
 import TerminalPanel from './TerminalPanel.vue'
 import CommandPalette from './CommandPalette.vue'
 import QuickOpenModal from './QuickOpenModal.vue'
@@ -16,6 +17,7 @@ import AboutModal from './AboutModal.vue'
 import { getNuxtFileIcon } from '@renderer/utils/languageDetector'
 import logoImg from '@renderer/assets/logo.png'
 import openCodeLogo from '@renderer/assets/opencode-logo.png'
+import claudeLogo from '@renderer/assets/claude-logo.svg'
 
 const workspaceStore = useWorkspaceStore()
 const settingsStore = useSettingsStore()
@@ -415,6 +417,18 @@ onUnmounted(() => {
           <img :src="openCodeLogo" alt="OpenCode" class="size-4 rounded-xs object-contain" />
         </button>
 
+        <!-- Claude Autonomous Agent (CLI) -->
+        <button
+          @click="workspaceStore.toggleClaudePanel()"
+          class="w-7.5 h-7.5 rounded-xl flex items-center justify-center transition-all duration-200 cursor-pointer relative"
+          :class="workspaceStore.isClaudePanelOpen
+            ? 'bg-[#ea580c]/20 text-[#f97316] border border-[#ea580c]/40 shadow-xs shadow-[#ea580c]/20'
+            : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04] border border-transparent hover:border-white/[0.06]'"
+          title="Claude Code Agent"
+        >
+          <img :src="claudeLogo" alt="Claude" class="size-4 rounded-xs object-contain" />
+        </button>
+
         <div class="flex-1"></div>
 
         <!-- Sidebar Collapse / Expand Toggle Button -->
@@ -548,6 +562,9 @@ onUnmounted(() => {
 
       <!-- OpenCode Autonomous Agent Panel -->
       <OpenCodePanel v-show="workspaceStore.isOpenCodePanelOpen" />
+
+      <!-- Claude Autonomous Agent Panel -->
+      <ClaudePanel v-show="workspaceStore.isClaudePanelOpen" />
     </div>
 
     <!-- Editor Module Modals & Overlays -->

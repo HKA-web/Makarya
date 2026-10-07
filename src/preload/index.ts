@@ -119,6 +119,27 @@ const makaryaAPI = {
     ipcRenderer.invoke('opencode:session-load', sessionId),
   deleteOpenCodeSession: (sessionId: string): Promise<boolean> =>
     ipcRenderer.invoke('opencode:session-delete', sessionId),
+  startClaudeStream: (payload: {
+    requestId: string
+    model?: string
+    messages: Array<{
+      role: 'system' | 'user' | 'assistant'
+      content: string
+    }>
+    projectRoot?: string
+    executionMode?: string
+  }): Promise<{ accepted: boolean }> =>
+    ipcRenderer.invoke('claude:chat-stream', payload),
+  abortClaudeStream: (requestId: string): Promise<{ aborted: boolean }> =>
+    ipcRenderer.invoke('claude:chat-abort', requestId),
+  fetchClaudeModels: (): Promise<Array<{ id: string; name: string; provider?: string; category: string; isFree?: boolean; source?: string }>> =>
+    ipcRenderer.invoke('claude:get-models'),
+  fetchClaudeSessions: (): Promise<Array<{ id: string; title: string; updated?: string; dateGroup?: string; timestamp?: number; subtitle?: string; isPinned?: boolean }>> =>
+    ipcRenderer.invoke('claude:session-list'),
+  loadClaudeSession: (sessionId: string): Promise<{ id: string; title: string; messages: any[] } | null> =>
+    ipcRenderer.invoke('claude:session-load', sessionId),
+  deleteClaudeSession: (sessionId: string): Promise<boolean> =>
+    ipcRenderer.invoke('claude:session-delete', sessionId),
   abortChatMessage: (requestId: string): Promise<{ aborted: boolean }> =>
     ipcRenderer.invoke('agent:chat-abort', requestId),
   respondToolApproval: (toolCallId: string, approved: boolean): Promise<boolean> =>

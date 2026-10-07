@@ -112,6 +112,21 @@ export interface ElectronAPI {
   fetchOpenCodeSessions: () => Promise<Array<{ id: string; title: string; updated?: string; dateGroup?: string; timestamp?: number; subtitle?: string; isPinned?: boolean }>>
   loadOpenCodeSession: (sessionId: string) => Promise<{ id: string; title: string; messages: any[] } | null>
   deleteOpenCodeSession: (sessionId: string) => Promise<boolean>
+  startClaudeStream: (payload: {
+    requestId: string
+    model?: string
+    messages: Array<{
+      role: 'system' | 'user' | 'assistant'
+      content: string
+    }>
+    projectRoot?: string
+    executionMode?: string
+  }) => Promise<{ accepted: boolean }>
+  abortClaudeStream: (requestId: string) => Promise<{ aborted: boolean }>
+  fetchClaudeModels: () => Promise<Array<{ id: string; name: string; provider?: string; category: string; isFree?: boolean; source?: string }>>
+  fetchClaudeSessions: () => Promise<Array<{ id: string; title: string; updated?: string; dateGroup?: string; timestamp?: number; subtitle?: string; isPinned?: boolean }>>
+  loadClaudeSession: (sessionId: string) => Promise<{ id: string; title: string; messages: any[] } | null>
+  deleteClaudeSession: (sessionId: string) => Promise<boolean>
   abortChatMessage: (requestId: string) => Promise<{ aborted: boolean }>
   respondToolApproval: (toolCallId: string, approved: boolean) => Promise<boolean>
   respondCustomTool: (toolCallId: string, result: any) => Promise<boolean>

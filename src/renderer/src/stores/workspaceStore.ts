@@ -275,6 +275,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const recentFiles = ref<Array<{ name: string; path: string }>>([])
   const isCopilotPanelOpen = ref<boolean>(true)
   const isOpenCodePanelOpen = ref<boolean>(false)
+  const isClaudePanelOpen = ref<boolean>(false)
   const isSidebarOpen = ref<boolean>(true)
   const activeSidebarTab = ref<'explorer' | 'search'>('explorer')
   const isBottomPanelOpen = ref<boolean>(false)
@@ -1185,6 +1186,10 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     isOpenCodePanelOpen.value = !isOpenCodePanelOpen.value
   }
 
+  function toggleClaudePanel(): void {
+    isClaudePanelOpen.value = !isClaudePanelOpen.value
+  }
+
   function toggleSidebar(): void {
     isSidebarOpen.value = !isSidebarOpen.value
   }
@@ -1240,6 +1245,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     closeQuickOpen,
     isCopilotPanelOpen,
     isOpenCodePanelOpen,
+    isClaudePanelOpen,
     isSidebarOpen,
     activeSidebarTab,
     isBottomPanelOpen,
@@ -1273,6 +1279,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     toggleCommandPalette,
     toggleCopilotPanel,
     toggleOpenCodePanel,
+    toggleClaudePanel,
     toggleSidebar,
     createFile,
     createFolder,

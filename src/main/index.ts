@@ -8,6 +8,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 // Mesin AI Agent bertenaga Vercel AI SDK (Universal Provider, Auto Loop, Zod Validation)
 import { VercelAiAgentService as AiAgentService } from './agent/vercelAiService'
 import { OpenCodeCliService } from './agent/openCodeCliService'
+import { ClaudeCliService } from './agent/claudeCliService'
 import { uiBuilderService } from './agent/uiBuilderService'
 import { databaseService } from './db/databaseService'
 import { liveDatabaseDriverService } from './db/liveDbDriver'
@@ -18,6 +19,7 @@ let primaryWindow: BrowserWindow | null = null
 const activeBrowserWindows = new Set<BrowserWindow>()
 const aiAgentService = new AiAgentService()
 const openCodeCliService = new OpenCodeCliService(aiAgentService)
+const claudeCliService = new ClaudeCliService(aiAgentService)
 
 interface RunningProcessInfo {
   appId: string
@@ -739,6 +741,39 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('opencode:session-delete', async (_event, sessionId: string) => {
     return openCodeCliService.deleteSession(sessionId)
+  })
+
+  // Claude CLI / Autonomous Agent Streaming
+  ipcMain.handle('claude:chat-stream', async (event, requestPayload) => {
+    const windowTarget = BrowserWindow.fromWebContents(event.sender) || primaryWindow
+    claudeCliService.streamClaude(requestPayload, windowTarget).catch((streamError) => {
+      console.error('[Main] Claude stream error:', streamError)
+    })
+    return { accepted: true }
+  })
+
+  // Claude CLI Agent Abort
+  ipcMain.handle('claude:chat-abort', async (_event, requestId: string) => {
+    const isAborted = claudeCliService.abortStream(requestId)
+    return { aborted: isAborted }
+  })
+
+  // Claude CLI Discovered Models (Config + CLI + 9Router)
+  ipcMain.handle('claude:get-models', async () => {
+    return claudeCliService.getDiscoveredModels()
+  })
+
+  // Claude CLI Sessions (List, Load, Delete)
+  ipcMain.handle('claude:session-list', async () => {
+    return claudeCliService.listSessions()
+  })
+
+  ipcMain.handle('claude:session-load', async (_event, sessionId: string) => {
+    return claudeCliService.loadSession(sessionId)
+  })
+
+  ipcMain.handle('claude:session-delete', async (_event, sessionId: string) => {
+    return claudeCliService.deleteSession(sessionId)
   })
 
   // UI Builder Streaming Generation (9router & Multimodal)
