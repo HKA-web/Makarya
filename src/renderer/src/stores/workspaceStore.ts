@@ -594,6 +594,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return undefined
   }
 
+  const inFlightOpenFiles = new Map<string, Promise<void>>()
+
   // Open a file from disk into a tab (with optional targetLine jump)
   async function openFile(filePath: string, fileName: string, targetLine?: number): Promise<void> {
     const rootPath = activeRootPath.value || (workspaceRoots.value[0]?.path) || null
@@ -603,18 +605,88 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       resolvedPath = `${rootPath.replace(/[\\/]+$/, '')}${sep}${filePath.replace(/^[\\/]+/, '')}`
     }
 
-    recordRecentFile(resolvedPath, fileName)
-    saveCurrentEditorStateToActiveTab()
-
     const norm = normalizePath(resolvedPath)
-    const existingTab = tabList.value.find((tab) => tab.filePath && normalizePath(tab.filePath) === norm)
-    if (existingTab) {
-      activeTabId.value = existingTab.id
-      updateMru(existingTab.id)
-      const pendingDiff = getPendingDiff(resolvedPath)
-      if (pendingDiff) {
-        existingTab.content = pendingDiff.newContent
+
+    // If an openFile operation is already in flight for this exact path, await it to prevent duplicate creation
+    if (inFlightOpenFiles.has(norm)) {
+      await inFlightOpenFiles.get(norm)
+      const existing = tabList.value.find((tab) => tab.filePath && normalizePath(tab.filePath) === norm)
+      if (existing) {
+        activeTabId.value = existing.id
+        updateMru(existing.id)
       }
+      return
+    }
+
+    const task = (async (): Promise<void> => {
+      recordRecentFile(resolvedPath, fileName)
+      saveCurrentEditorStateToActiveTab()
+
+      const existingTab = tabList.value.find((tab) => tab.filePath && normalizePath(tab.filePath) === norm)
+      if (existingTab) {
+        activeTabId.value = existingTab.id
+        updateMru(existingTab.id)
+        const pendingDiff = getPendingDiff(resolvedPath)
+        if (pendingDiff) {
+          existingTab.content = pendingDiff.newContent
+        }
+        if (targetLine && targetLine > 0) {
+          setTimeout(() => {
+            const editor = getActiveEditorInstance()
+            if (editor) {
+              editor.revealLineInCenter(targetLine)
+              editor.setPosition({ lineNumber: targetLine, column: 1 })
+              editor.focus()
+            }
+          }, 50)
+        }
+        return
+      }
+
+      if (!window.makaryaAPI) return
+
+      const readResult = await window.makaryaAPI.readFile(resolvedPath)
+      if (readResult.error) {
+        console.error(`Gagal membaca file ${resolvedPath}:`, readResult.error)
+        return
+      }
+
+      // Re-check after async readFile in case another parallel call or event already created the tab
+      const existingAfterRead = tabList.value.find((tab) => tab.filePath && normalizePath(tab.filePath) === norm)
+      if (existingAfterRead) {
+        existingAfterRead.content = readResult.content
+        existingAfterRead.savedContent = readResult.content
+        existingAfterRead.isDirty = false
+        activeTabId.value = existingAfterRead.id
+        updateMru(existingAfterRead.id)
+        return
+      }
+
+      const detectedLang = detectMonacoLanguage(resolvedPath)
+      const iconClass = getFileIconClass(fileName, false)
+
+      const newTab: WorkspaceTab = {
+        id: `tab-${resolvedPath.replace(/[^a-zA-Z0-9]/g, '_')}`,
+        title: fileName,
+        icon: iconClass,
+        tabType: 'editor',
+        filePath: resolvedPath,
+        content: readResult.content,
+        savedContent: readResult.content,
+        isDirty: false,
+        language: detectedLang
+      }
+
+      // Remove welcome tab if it's the only one open
+      if (tabList.value.length === 1 && tabList.value[0].id === 'tab-welcome') {
+        tabList.value = []
+      }
+
+      tabList.value.push(newTab)
+      deduplicateTabs()
+      activeTabId.value = newTab.id
+      updateMru(newTab.id)
+
       if (targetLine && targetLine > 0) {
         setTimeout(() => {
           const editor = getActiveEditorInstance()
@@ -623,52 +695,15 @@ export const useWorkspaceStore = defineStore('workspace', () => {
             editor.setPosition({ lineNumber: targetLine, column: 1 })
             editor.focus()
           }
-        }, 50)
+        }, 100)
       }
-      return
-    }
+    })()
 
-    if (!window.makaryaAPI) return
-
-    const readResult = await window.makaryaAPI.readFile(resolvedPath)
-    if (readResult.error) {
-      console.error(`Gagal membaca file ${resolvedPath}:`, readResult.error)
-      return
-    }
-
-    const detectedLang = detectMonacoLanguage(resolvedPath)
-    const iconClass = getFileIconClass(fileName, false)
-
-    const newTab: WorkspaceTab = {
-      id: `tab-${resolvedPath.replace(/[^a-zA-Z0-9]/g, '_')}`,
-      title: fileName,
-      icon: iconClass,
-      tabType: 'editor',
-      filePath: resolvedPath,
-      content: readResult.content,
-      savedContent: readResult.content,
-      isDirty: false,
-      language: detectedLang
-    }
-
-    // Remove welcome tab if it's the only one open
-    if (tabList.value.length === 1 && tabList.value[0].id === 'tab-welcome') {
-      tabList.value = []
-    }
-
-    tabList.value.push(newTab)
-    activeTabId.value = newTab.id
-    updateMru(newTab.id)
-
-    if (targetLine && targetLine > 0) {
-      setTimeout(() => {
-        const editor = getActiveEditorInstance()
-        if (editor) {
-          editor.revealLineInCenter(targetLine)
-          editor.setPosition({ lineNumber: targetLine, column: 1 })
-          editor.focus()
-        }
-      }, 100)
+    inFlightOpenFiles.set(norm, task)
+    try {
+      await task
+    } finally {
+      inFlightOpenFiles.delete(norm)
     }
   }
 
@@ -754,14 +789,28 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   function deduplicateTabs(): void {
-    const seen = new Set<string>()
-    tabList.value = tabList.value.filter((tab) => {
-      if (!tab.filePath) return true
-      const norm = normalizePath(tab.filePath)
-      if (seen.has(norm)) return false
-      seen.add(norm)
-      return true
-    })
+    const seenPaths = new Set<string>()
+    const seenIds = new Set<string>()
+    const unique: WorkspaceTab[] = []
+
+    for (const tab of tabList.value) {
+      if (seenIds.has(tab.id)) continue
+      seenIds.add(tab.id)
+
+      if (tab.filePath) {
+        const norm = normalizePath(tab.filePath)
+        if (seenPaths.has(norm)) continue
+        seenPaths.add(norm)
+      }
+      unique.push(tab)
+    }
+
+    if (unique.length !== tabList.value.length) {
+      tabList.value = unique
+      if (!unique.some((t) => t.id === activeTabId.value)) {
+        activeTabId.value = unique[unique.length - 1]?.id || 'tab-welcome'
+      }
+    }
   }
 
   function getParentDirectoryPath(filePath: string): string {

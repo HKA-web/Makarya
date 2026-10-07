@@ -5,7 +5,7 @@ import ui from '@nuxt/ui/vite'
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin({ exclude: ['@electron-toolkit/utils'] })]
+    plugins: [externalizeDepsPlugin()]
   },
   preload: {
     plugins: [externalizeDepsPlugin({ exclude: ['@electron-toolkit/preload'] })],

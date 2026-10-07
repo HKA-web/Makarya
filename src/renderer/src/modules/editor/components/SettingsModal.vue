@@ -540,7 +540,7 @@ async function handleSync9Router(): Promise<void> {
           <div class="space-y-1">
             <label class="text-[11px] text-slate-400 flex items-center justify-between">
               <span>Base URL (Endpoint API 9router)</span>
-              <span class="text-[10px] text-slate-500">Default: http://127.0.0.1:20128/v1</span>
+              <span class="text-[10px] text-slate-500">Contoh: http://127.0.0.1:20128/v1</span>
             </label>
             <div class="relative">
               <UIcon name="i-lucide-globe" class="size-3.5 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />

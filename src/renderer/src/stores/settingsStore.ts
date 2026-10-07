@@ -287,12 +287,6 @@ export const useSettingsStore = defineStore('settingsStore', () => {
           localStorage.setItem('makarya_ai_settings', JSON.stringify(ai.value))
           localStorage.setItem('makarya_auto_execution', ai.value.autoExecution)
         } catch {}
-      } else {
-        // Auto-seed untuk instance lokal saat ini jika belum ada data di database
-        if (!ai.value.baseUrl && !ai.value.apiKey) {
-          ai.value.baseUrl = 'http://127.0.0.1:20128/v1'
-          ai.value.apiKey = 'sk-45b3e552022dad0c-2i6fs2-08e23a79'
-        }
       }
 
       // Sync ke backend main process

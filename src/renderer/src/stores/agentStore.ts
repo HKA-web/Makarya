@@ -183,6 +183,7 @@ export const useAgentStore = defineStore('agentStore', () => {
   let cleanupToolStartListener: (() => void) | null = null
   let cleanupToolRequireApprovalListener: (() => void) | null = null
   let cleanupToolFinishListener: (() => void) | null = null
+  let cleanupCustomToolListener: (() => void) | null = null
   let cleanupFileModifiedListener: (() => void) | null = null
   let cleanupDoneListener: (() => void) | null = null
   let cleanupErrorListener: (() => void) | null = null
@@ -357,7 +358,10 @@ export const useAgentStore = defineStore('agentStore', () => {
     cleanupTokenListener?.()
     cleanupThoughtListener?.()
     cleanupToolStartListener?.()
+    cleanupToolRequireApprovalListener?.()
     cleanupToolFinishListener?.()
+    cleanupCustomToolListener?.()
+    cleanupFileModifiedListener?.()
     cleanupDoneListener?.()
     cleanupErrorListener?.()
 
@@ -442,7 +446,7 @@ export const useAgentStore = defineStore('agentStore', () => {
 
     // 3c. Dynamic Tool Execution from Plugins
     if (window.makaryaAPI?.onAgentExecuteCustomTool) {
-      window.makaryaAPI.onAgentExecuteCustomTool(async (data) => {
+      cleanupCustomToolListener = window.makaryaAPI.onAgentExecuteCustomTool(async (data) => {
         const pluginStore = usePluginStore()
         const tool = pluginStore.customAiTools.get(data.toolName)
         if (tool && tool.execute) {
