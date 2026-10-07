@@ -6,6 +6,7 @@ import { usePluginStore } from '@renderer/stores/pluginStore'
 import MonacoEditor from './MonacoEditor.vue'
 import FileExplorer from './FileExplorer.vue'
 import AgentPanel from './AgentPanel.vue'
+import OpenCodePanel from './OpenCodePanel.vue'
 import TerminalPanel from './TerminalPanel.vue'
 import CommandPalette from './CommandPalette.vue'
 import QuickOpenModal from './QuickOpenModal.vue'
@@ -14,6 +15,7 @@ import TabSwitcherModal from './TabSwitcherModal.vue'
 import AboutModal from './AboutModal.vue'
 import { getNuxtFileIcon } from '@renderer/utils/languageDetector'
 import logoImg from '@renderer/assets/logo.png'
+import openCodeLogo from '@renderer/assets/opencode-logo.png'
 
 const workspaceStore = useWorkspaceStore()
 const settingsStore = useSettingsStore()
@@ -401,6 +403,18 @@ onUnmounted(() => {
           <UIcon name="i-lucide-puzzle" class="size-4" />
         </button>
 
+        <!-- OpenCode Autonomous Agent (CLI) -->
+        <button
+          @click="workspaceStore.toggleOpenCodePanel()"
+          class="w-7.5 h-7.5 rounded-xl flex items-center justify-center transition-all duration-200 cursor-pointer relative"
+          :class="workspaceStore.isOpenCodePanelOpen
+            ? 'bg-[#42b883]/20 text-[#42b883] border border-[#42b883]/40 shadow-xs shadow-[#42b883]/20'
+            : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04] border border-transparent hover:border-white/[0.06]'"
+          title="OpenCode CLI Agent"
+        >
+          <img :src="openCodeLogo" alt="OpenCode" class="size-4 rounded-xs object-contain" />
+        </button>
+
         <div class="flex-1"></div>
 
         <!-- Sidebar Collapse / Expand Toggle Button -->
@@ -531,6 +545,9 @@ onUnmounted(() => {
 
       <!-- Right Copilot AI Panel (Identik dengan Gambar 2) -->
       <AgentPanel v-show="workspaceStore.isCopilotPanelOpen" />
+
+      <!-- OpenCode Autonomous Agent Panel -->
+      <OpenCodePanel v-show="workspaceStore.isOpenCodePanelOpen" />
     </div>
 
     <!-- Editor Module Modals & Overlays -->

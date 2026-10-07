@@ -7,6 +7,7 @@ import * as net from 'node:net'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 // Mesin AI Agent bertenaga Vercel AI SDK (Universal Provider, Auto Loop, Zod Validation)
 import { VercelAiAgentService as AiAgentService } from './agent/vercelAiService'
+import { OpenCodeCliService } from './agent/openCodeCliService'
 import { uiBuilderService } from './agent/uiBuilderService'
 import { databaseService } from './db/databaseService'
 import { liveDatabaseDriverService } from './db/liveDbDriver'
@@ -16,6 +17,7 @@ import { createSplashScreen } from './splash/splashService'
 let primaryWindow: BrowserWindow | null = null
 const activeBrowserWindows = new Set<BrowserWindow>()
 const aiAgentService = new AiAgentService()
+const openCodeCliService = new OpenCodeCliService(aiAgentService)
 
 interface RunningProcessInfo {
   appId: string
@@ -516,6 +518,40 @@ function registerIpcHandlers(): void {
     }
   })
 
+  // Save uploaded image to project .makarya/images folder
+  ipcMain.handle('fs:save-image-to-project', async (_event, projectRoot: string, fileName: string, base64Data: string) => {
+    try {
+      if (!projectRoot || !existsSync(projectRoot)) {
+        return { success: false, error: 'Project root tidak ditemukan' }
+      }
+      const makaryaDir = join(projectRoot, '.makarya', 'images')
+      if (!existsSync(makaryaDir)) {
+        await mkdir(makaryaDir, { recursive: true })
+      }
+      const cleanBase64 = base64Data.replace(/^data:image\/\w+;base64,/, '')
+      const buffer = Buffer.from(cleanBase64, 'base64')
+      
+      const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_')
+      let targetPath = join(makaryaDir, safeName)
+      
+      if (existsSync(targetPath)) {
+        const parsed = parse(safeName)
+        let idx = 1
+        while (existsSync(join(makaryaDir, `${parsed.name}_${idx}${parsed.ext}`))) {
+          idx++
+        }
+        targetPath = join(makaryaDir, `${parsed.name}_${idx}${parsed.ext}`)
+      }
+
+      await writeFile(targetPath, buffer)
+      const relativePath = relative(projectRoot, targetPath).replace(/\\/g, '/')
+      return { success: true, absolutePath: targetPath, relativePath, fileName: basename(targetPath) }
+    } catch (err: any) {
+      console.error('Error saving image to project:', err)
+      return { success: false, error: err?.message || 'Gagal menyimpan gambar ke folder .makarya' }
+    }
+  })
+
   // Create new empty file
   ipcMain.handle('fs:create-file', async (_event, targetFilePath: string) => {
     try {
@@ -670,6 +706,39 @@ function registerIpcHandlers(): void {
       console.error('[Main] Stream chat unhandled error:', streamError)
     })
     return { accepted: true }
+  })
+
+  // OpenCode CLI Agent Streaming
+  ipcMain.handle('opencode:chat-stream', async (event, requestPayload) => {
+    const windowTarget = BrowserWindow.fromWebContents(event.sender) || primaryWindow
+    openCodeCliService.streamOpenCode(requestPayload, windowTarget).catch((streamError) => {
+      console.error('[Main] OpenCode stream error:', streamError)
+    })
+    return { accepted: true }
+  })
+
+  // OpenCode CLI Agent Abort
+  ipcMain.handle('opencode:chat-abort', async (_event, requestId: string) => {
+    const isAborted = openCodeCliService.abortStream(requestId)
+    return { aborted: isAborted }
+  })
+
+  // OpenCode CLI Discovered Models (Config + CLI + 9Router)
+  ipcMain.handle('opencode:get-models', async () => {
+    return openCodeCliService.getDiscoveredModels()
+  })
+
+  // OpenCode CLI Sessions (List, Load, Delete)
+  ipcMain.handle('opencode:session-list', async () => {
+    return openCodeCliService.listSessions()
+  })
+
+  ipcMain.handle('opencode:session-load', async (_event, sessionId: string) => {
+    return openCodeCliService.loadSession(sessionId)
+  })
+
+  ipcMain.handle('opencode:session-delete', async (_event, sessionId: string) => {
+    return openCodeCliService.deleteSession(sessionId)
   })
 
   // UI Builder Streaming Generation (9router & Multimodal)

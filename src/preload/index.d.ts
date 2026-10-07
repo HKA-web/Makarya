@@ -75,6 +75,7 @@ export interface ElectronAPI {
   deleteEntry: (targetPath: string) => Promise<{ success: boolean; error?: string }>
   copyEntry: (sourcePath: string, destinationDirectory: string, customNewName?: string) => Promise<{ success: boolean; destinationPath?: string; error?: string }>
   searchWorkspaceFiles: (rootPaths: string[]) => Promise<WorkspaceFileItem[]>
+  saveImageToProject: (projectRoot: string, fileName: string, base64Data: string) => Promise<{ success: boolean; absolutePath?: string; relativePath?: string; fileName?: string; error?: string }>
 
   // AI Copilot & Autonomous Agent API
   sendChatMessage: (payload: {
@@ -96,6 +97,21 @@ export interface ElectronAPI {
       pluginId?: string
     }>
   }) => Promise<{ accepted: boolean }>
+  startOpenCodeStream: (payload: {
+    requestId: string
+    model?: string
+    messages: Array<{
+      role: 'system' | 'user' | 'assistant'
+      content: string
+    }>
+    projectRoot?: string
+    executionMode?: string
+  }) => Promise<{ accepted: boolean }>
+  abortOpenCodeStream: (requestId: string) => Promise<{ aborted: boolean }>
+  fetchOpenCodeModels: () => Promise<Array<{ id: string; name: string; provider?: string; category: string; isFree?: boolean; source?: string }>>
+  fetchOpenCodeSessions: () => Promise<Array<{ id: string; title: string; updated?: string; dateGroup?: string; timestamp?: number; subtitle?: string; isPinned?: boolean }>>
+  loadOpenCodeSession: (sessionId: string) => Promise<{ id: string; title: string; messages: any[] } | null>
+  deleteOpenCodeSession: (sessionId: string) => Promise<boolean>
   abortChatMessage: (requestId: string) => Promise<{ aborted: boolean }>
   respondToolApproval: (toolCallId: string, approved: boolean) => Promise<boolean>
   respondCustomTool: (toolCallId: string, result: any) => Promise<boolean>
@@ -127,6 +143,7 @@ export interface ElectronAPI {
   }>
   fetchAvailableModels: () => Promise<string[]>
   onAgentToolRequireApproval: (callback: (data: { requestId: string; toolCallId: string; toolName: string; args: any }) => void) => () => void
+  onAgentAskQuestion: (callback: (data: { requestId: string; toolCallId: string; question: string; options: string[]; is_multi_select?: boolean }) => void) => () => void
   onAgentExecuteCustomTool: (callback: (data: { requestId: string; toolCallId: string; toolName: string; args: any }) => void) => () => void
   onAgentStreamToken: (callback: (data: { requestId: string; deltaContent: string }) => void) => () => void
   onAgentThought: (callback: (data: { requestId: string; deltaThought: string }) => void) => () => void

@@ -107,12 +107,137 @@ const AGENT_SYSTEM_PROMPT =
   '- Jangan pernah menjalankan DROP TABLE tanpa konfirmasi pengguna.\n' +
   '- Gunakan indexing jika query menyaring lebih dari 10.000 baris.\n' +
   '- Makarya IDE sudah memiliki driver native terintegrasi (PostgreSQL, MySQL, SQL Server, SQLite) yang langsung mengeksekusi kueri ke server database secara instan dan aman.\n\n' +
-  'PANDUAN EKSEKUSI & EFISIENSI:\n' +
-  '- Sebelum memanggil tool atau menjawab, tuliskan proses berpikir / rencana tindakan Anda di dalam tag <thought>...</thought>.\n' +
-  '- Jangan membaca/mendaftar seluruh file secara berlebihan jika tidak diperlukan. Fokus langsung ke file target yang relevan dengan instruksi pengguna.\n' +
+  'PANDUAN EKSEKUSI & EFISIENSI (AKSI LANGSUNG):\n' +
+  '- PROAKTIF & LANGSUNG EKSEKUSI: Jika pengguna meminta optimasi, perbaikan, atau pembuatan file baru, JANGAN HANYA bertanya atau menawarkan "Apakah Anda ingin saya buatkan...". LANGSUNG buat atau perbarui berkas menggunakan tool `write_file` dan tampilkan kode solusinya kepada pengguna!\n' +
+  '- EFISIENSI MEMBACA: Jangan memanggil tool `read_file` atau `list_dir` berkali-kali untuk seluruh file yang tidak relevan. Cukup baca 1 atau 2 file target yang diperlukan, lalu segera lakukan modifikasi dengan `write_file`.\n' +
+  '- Sebelum memanggil tool atau menjawab, Anda dapat menuliskan analisis singkat di dalam tag <thought>...</thought>.\n' +
   '- Jika pengguna meminta untuk memeriksa, menguji (test), memperbaiki (debug), atau menjalankan perintah/kueri database, LANGSUNG panggil tool yang relevan!\n' +
   '- Jika hasil tool error atau ada kegagalan sintaks/test, analisis pesan error, perbaiki masalahnya, dan uji kembali.\n' +
-  '- PENTING: Setelah semua tindakan tool selesai, SELALU berikan kesimpulan akhir, penjelasan perubahan yang telah dilakukan, atau solusi kepada pengguna secara jelas dan rapi dalam format Markdown Bahasa Indonesia.'
+  '- ATURAN WAJIB AKHIR (FINAL RESPONSE): Setelah Anda selesai mengeksekusi tool (mencari, membaca, atau menulis perubahan), Anda HARUS SELALU menuliskan penjelasan perubahan yang telah dilakukan, path file yang dimodifikasi, dan ringkasan kode hasil optimalisasi langsung kepada pengguna dalam format Markdown Bahasa Indonesia.'
+
+class StreamingThoughtParser {
+  private buffer = ''
+  private inThought = false
+
+  public processChunk(text: string): { thoughtDelta: string; contentDelta: string } {
+    this.buffer += text
+    let thoughtDelta = ''
+    let contentDelta = ''
+
+    while (this.buffer.length > 0) {
+      if (!this.inThought) {
+        const thoughtStartIdx = this.findStartTag(this.buffer)
+        if (thoughtStartIdx === -1) {
+          const partialLen = this.getPartialStartTagLength(this.buffer)
+          if (partialLen > 0) {
+            const emitLen = this.buffer.length - partialLen
+            if (emitLen > 0) {
+              contentDelta += this.buffer.slice(0, emitLen)
+              this.buffer = this.buffer.slice(emitLen)
+            }
+            break
+          } else {
+            contentDelta += this.buffer
+            this.buffer = ''
+            break
+          }
+        } else {
+          if (thoughtStartIdx > 0) {
+            contentDelta += this.buffer.slice(0, thoughtStartIdx)
+          }
+          const tagLen = this.getStartTagLengthAt(this.buffer, thoughtStartIdx)
+          this.buffer = this.buffer.slice(thoughtStartIdx + tagLen)
+          this.inThought = true
+        }
+      } else {
+        const thoughtEndIdx = this.findEndTag(this.buffer)
+        if (thoughtEndIdx === -1) {
+          const partialLen = this.getPartialEndTagLength(this.buffer)
+          if (partialLen > 0) {
+            const emitLen = this.buffer.length - partialLen
+            if (emitLen > 0) {
+              thoughtDelta += this.buffer.slice(0, emitLen)
+              this.buffer = this.buffer.slice(emitLen)
+            }
+            break
+          } else {
+            thoughtDelta += this.buffer
+            this.buffer = ''
+            break
+          }
+        } else {
+          if (thoughtEndIdx > 0) {
+            thoughtDelta += this.buffer.slice(0, thoughtEndIdx)
+          }
+          const tagLen = this.getEndTagLengthAt(this.buffer, thoughtEndIdx)
+          this.buffer = this.buffer.slice(thoughtEndIdx + tagLen)
+          this.inThought = false
+        }
+      }
+    }
+
+    return { thoughtDelta, contentDelta }
+  }
+
+  public flush(): { thoughtDelta: string; contentDelta: string } {
+    const remaining = this.buffer
+    this.buffer = ''
+    if (this.inThought) {
+      this.inThought = false
+      return { thoughtDelta: remaining, contentDelta: '' }
+    } else {
+      return { thoughtDelta: '', contentDelta: remaining }
+    }
+  }
+
+  private findStartTag(str: string): number {
+    const t1 = str.indexOf('<thought>')
+    const t2 = str.indexOf('<think>')
+    if (t1 !== -1 && t2 !== -1) return Math.min(t1, t2)
+    if (t1 !== -1) return t1
+    return t2
+  }
+
+  private getStartTagLengthAt(str: string, idx: number): number {
+    if (str.startsWith('<thought>', idx)) return 9
+    if (str.startsWith('<think>', idx)) return 7
+    return 0
+  }
+
+  private findEndTag(str: string): number {
+    const t1 = str.indexOf('</thought>')
+    const t2 = str.indexOf('</think>')
+    if (t1 !== -1 && t2 !== -1) return Math.min(t1, t2)
+    if (t1 !== -1) return t1
+    return t2
+  }
+
+  private getEndTagLengthAt(str: string, idx: number): number {
+    if (str.startsWith('</thought>', idx)) return 10
+    if (str.startsWith('</think>', idx)) return 8
+    return 0
+  }
+
+  private getPartialStartTagLength(str: string): number {
+    const candidates = ['<thought>', '<think>']
+    for (const tag of candidates) {
+      for (let i = tag.length - 1; i > 0; i--) {
+        if (str.endsWith(tag.slice(0, i))) return i
+      }
+    }
+    return 0
+  }
+
+  private getPartialEndTagLength(str: string): number {
+    const candidates = ['</thought>', '</think>']
+    for (const tag of candidates) {
+      for (let i = tag.length - 1; i > 0; i--) {
+        if (str.endsWith(tag.slice(0, i))) return i
+      }
+    }
+    return 0
+  }
+}
 
 function buildZodSchemaFromJsonSchema(schema: any): z.ZodTypeAny {
   if (!schema || typeof schema !== 'object') {
@@ -185,13 +310,26 @@ export class VercelAiAgentService {
   }
 
   public respondCustomTool(toolCallId: string, result: any): boolean {
+    let resolvedAny = false
     const resolver = this.pendingCustomToolExecutions.get(toolCallId)
     if (resolver) {
       resolver(result)
       this.pendingCustomToolExecutions.delete(toolCallId)
-      return true
+      resolvedAny = true
     }
-    return false
+
+    // Resolve any remaining pending custom tools (e.g. duplicate parallel questions) so the LLM stream never hangs
+    for (const [id, pendingResolver] of Array.from(this.pendingCustomToolExecutions.entries())) {
+      try {
+        pendingResolver(result)
+      } catch (e) {
+        console.warn('Error resolving secondary custom tool promise:', e)
+      }
+      this.pendingCustomToolExecutions.delete(id)
+      resolvedAny = true
+    }
+
+    return resolvedAny
   }
 
   public abortStream(requestId: string): boolean {
@@ -266,10 +404,20 @@ export class VercelAiAgentService {
       const baseUrl = this.configuration.baseUrl || 'http://127.0.0.1:20128/v1'
       const cleanBase = baseUrl.replace(/\/+$/, '')
 
-      const selectedModel =
-        model ||
-        this.configuration.defaultModel ||
-        'ag/gemini-3.6-flash-medium'
+      let selectedModel = model || this.configuration.defaultModel || 'Antigravity'
+
+      // Direct clean mapping for OpenCode models to 9Router provider endpoints
+      if (
+        selectedModel === 'router/Antigravity' ||
+        selectedModel === 'Antigravity router' ||
+        selectedModel === 'Antigravity'
+      ) {
+        selectedModel = 'Antigravity'
+      } else if (selectedModel === 'OpenCode') {
+        selectedModel = 'OpenCode'
+      } else if (selectedModel.startsWith('opencode/')) {
+        selectedModel = selectedModel.replace(/^opencode\//, '')
+      }
 
       // Instansiasi OpenAI provider Vercel AI SDK dengan endpoint konfigurasi
       const openaiProvider = createOpenAI({
@@ -451,6 +599,44 @@ export class VercelAiAgentService {
           ) => {
             return await toolExecutor.execute(toolCallId, 'list_dir', args)
           }
+        }),
+
+        ask_question: tool({
+          description:
+            'Gunakan tool ini untuk mengajukan pertanyaan interaktif berupa pilihan ganda (multiple choice) kepada pengguna saat Anda memerlukan klarifikasi, konfirmasi rencana pembuatan, preferensi teknologi/arsitektur, atau pemilihan opsi. Tool ini akan menampilkan kartu opsi pilihan interaktif di chat pengguna dan menunggu pengguna memilih atau menuliskan jawabannya.',
+          inputSchema: z.object({
+            question: z.string().describe('Pertanyaan klarifikasi yang diajukan ke pengguna'),
+            options: z.array(z.string()).describe('Daftar opsi pilihan (minimal 2 opsi) yang dapat dipilih oleh pengguna'),
+            is_multi_select: z.boolean().optional().describe('Set true jika pengguna boleh memilih lebih dari 1 opsi')
+          }),
+          execute: async (
+            args: { question: string; options: string[]; is_multi_select?: boolean },
+            { toolCallId }: { toolCallId: string }
+          ) => {
+            if (targetWindow && !targetWindow.isDestroyed()) {
+              targetWindow.webContents.send('agent:ask-question', {
+                requestId,
+                toolCallId,
+                question: args.question,
+                options: args.options,
+                is_multi_select: args.is_multi_select || false
+              })
+            }
+
+            const answer = await new Promise<any>((resolve) => {
+              this.pendingCustomToolExecutions.set(toolCallId, resolve)
+            })
+            this.pendingCustomToolExecutions.delete(toolCallId)
+
+            const formatted = Array.isArray(answer) ? answer.join(', ') : String(answer || '')
+            return {
+              toolCallId,
+              toolName: 'ask_question',
+              status: 'success',
+              output: `Pengguna telah memilih jawaban: "${formatted}"`,
+              durationMs: 0
+            }
+          }
         })
       }
 
@@ -497,56 +683,33 @@ export class VercelAiAgentService {
         system: AGENT_SYSTEM_PROMPT,
         messages: formattedMessages,
         tools: agentTools,
-        stopWhen: isStepCount(25),
+        stopWhen: isStepCount(40),
         abortSignal: abortController.signal
       })
 
       let fullContent = ''
-      let insideThoughtTag = false
+      let executedToolsCount = 0
+      const thoughtParser = new StreamingThoughtParser()
 
       for await (const chunk of streamResult.fullStream) {
         if (abortController.signal.aborted) break
 
         if (chunk.type === 'text-delta') {
-          const text = chunk.text
+          const { thoughtDelta, contentDelta } = thoughtParser.processChunk(chunk.text)
 
-          if (text.includes('<thought>')) {
-            insideThoughtTag = true
+          if (thoughtDelta && targetWindow && !targetWindow.isDestroyed()) {
+            targetWindow.webContents.send('agent:thought-token', {
+              requestId,
+              deltaThought: thoughtDelta
+            })
           }
 
-          if (insideThoughtTag) {
-            if (text.includes('</thought>')) {
-              insideThoughtTag = false
-              const parts = text.split('</thought>')
-              if (parts[0] && targetWindow && !targetWindow.isDestroyed()) {
-                targetWindow.webContents.send('agent:thought-token', {
-                  requestId,
-                  deltaThought: parts[0].replace('<thought>', '')
-                })
-              }
-              if (parts[1]) {
-                fullContent += parts[1]
-                if (targetWindow && !targetWindow.isDestroyed()) {
-                  targetWindow.webContents.send('agent:stream-token', {
-                    requestId,
-                    deltaContent: parts[1]
-                  })
-                }
-              }
-            } else {
-              if (targetWindow && !targetWindow.isDestroyed()) {
-                targetWindow.webContents.send('agent:thought-token', {
-                  requestId,
-                  deltaThought: text.replace('<thought>', '')
-                })
-              }
-            }
-          } else {
-            fullContent += text
+          if (contentDelta) {
+            fullContent += contentDelta
             if (targetWindow && !targetWindow.isDestroyed()) {
               targetWindow.webContents.send('agent:stream-token', {
                 requestId,
-                deltaContent: text
+                deltaContent: contentDelta
               })
             }
           }
@@ -558,6 +721,7 @@ export class VercelAiAgentService {
             })
           }
         } else if (chunk.type === 'tool-call') {
+          executedToolsCount++
           const anyChunk = chunk as any
           if (targetWindow && !targetWindow.isDestroyed()) {
             targetWindow.webContents.send('agent:tool-start', {
@@ -602,6 +766,36 @@ export class VercelAiAgentService {
               // Non-JSON output, skip
             }
           }
+        }
+      }
+
+      // Flush remaining buffered text from thoughtParser
+      const { thoughtDelta: remainingThought, contentDelta: remainingContent } = thoughtParser.flush()
+      if (remainingThought && targetWindow && !targetWindow.isDestroyed()) {
+        targetWindow.webContents.send('agent:thought-token', {
+          requestId,
+          deltaThought: remainingThought
+        })
+      }
+      if (remainingContent) {
+        fullContent += remainingContent
+        if (targetWindow && !targetWindow.isDestroyed()) {
+          targetWindow.webContents.send('agent:stream-token', {
+            requestId,
+            deltaContent: remainingContent
+          })
+        }
+      }
+
+      // If model executed tools but produced no final text, send a completion note so message isn't blank
+      if (!fullContent.trim() && executedToolsCount > 0 && !abortController.signal.aborted) {
+        const fallbackNote = '✅ *Semua tindakan dan analisis tool telah selesai dijalankan. Silakan periksa detail eksekusi tool di atas.*'
+        fullContent = fallbackNote
+        if (targetWindow && !targetWindow.isDestroyed()) {
+          targetWindow.webContents.send('agent:stream-token', {
+            requestId,
+            deltaContent: fallbackNote
+          })
         }
       }
 

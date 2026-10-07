@@ -74,6 +74,8 @@ const makaryaAPI = {
     ipcRenderer.invoke('fs:copy-entry', sourcePath, destinationDirectory, customNewName),
   searchWorkspaceFiles: (rootPaths: string[]): Promise<Array<{ name: string; path: string; relativePath: string; rootPath: string }>> =>
     ipcRenderer.invoke('fs:search-workspace-files', rootPaths),
+  saveImageToProject: (projectRoot: string, fileName: string, base64Data: string): Promise<{ success: boolean; absolutePath?: string; relativePath?: string; fileName?: string; error?: string }> =>
+    ipcRenderer.invoke('fs:save-image-to-project', projectRoot, fileName, base64Data),
 
   // AI Copilot & Autonomous Agent API
   sendChatMessage: (payload: {
@@ -96,6 +98,27 @@ const makaryaAPI = {
     }>
   }): Promise<{ accepted: boolean }> =>
     ipcRenderer.invoke('agent:chat-stream', payload),
+  startOpenCodeStream: (payload: {
+    requestId: string
+    model?: string
+    messages: Array<{
+      role: 'system' | 'user' | 'assistant'
+      content: string
+    }>
+    projectRoot?: string
+    executionMode?: string
+  }): Promise<{ accepted: boolean }> =>
+    ipcRenderer.invoke('opencode:chat-stream', payload),
+  abortOpenCodeStream: (requestId: string): Promise<{ aborted: boolean }> =>
+    ipcRenderer.invoke('opencode:chat-abort', requestId),
+  fetchOpenCodeModels: (): Promise<Array<{ id: string; name: string; provider?: string; category: string; isFree?: boolean; source?: string }>> =>
+    ipcRenderer.invoke('opencode:get-models'),
+  fetchOpenCodeSessions: (): Promise<Array<{ id: string; title: string; updated?: string; dateGroup?: string; timestamp?: number; subtitle?: string; isPinned?: boolean }>> =>
+    ipcRenderer.invoke('opencode:session-list'),
+  loadOpenCodeSession: (sessionId: string): Promise<{ id: string; title: string; messages: any[] } | null> =>
+    ipcRenderer.invoke('opencode:session-load', sessionId),
+  deleteOpenCodeSession: (sessionId: string): Promise<boolean> =>
+    ipcRenderer.invoke('opencode:session-delete', sessionId),
   abortChatMessage: (requestId: string): Promise<{ aborted: boolean }> =>
     ipcRenderer.invoke('agent:chat-abort', requestId),
   respondToolApproval: (toolCallId: string, approved: boolean): Promise<boolean> =>
@@ -127,6 +150,13 @@ const makaryaAPI = {
     ipcRenderer.on('agent:tool-require-approval', listener)
     return (): void => {
       ipcRenderer.removeListener('agent:tool-require-approval', listener)
+    }
+  },
+  onAgentAskQuestion: (callback: (data: { requestId: string; toolCallId: string; question: string; options: string[]; is_multi_select?: boolean }) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, data: { requestId: string; toolCallId: string; question: string; options: string[]; is_multi_select?: boolean }): void => callback(data)
+    ipcRenderer.on('agent:ask-question', listener)
+    return (): void => {
+      ipcRenderer.removeListener('agent:ask-question', listener)
     }
   },
   onAgentExecuteCustomTool: (callback: (data: { requestId: string; toolCallId: string; toolName: string; args: any }) => void): (() => void) => {
