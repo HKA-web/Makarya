@@ -36,6 +36,9 @@ export interface StreamChatRequest {
   autoExecution?: 'always_proceed' | 'ask_before' | 'never'
   reviewPolicy?: 'request_review' | 'auto_apply' | 'always_ask'
   customTools?: CustomToolDefinition[]
+  executionMode?: 'agent' | 'chat' | 'plan'
+  systemPrompt?: string
+  disableTools?: boolean
 }
 
 export interface AiServiceConfiguration {
@@ -677,13 +680,32 @@ export class VercelAiAgentService {
         }
       }
 
+      // Ekstraksi custom system message jika dikirimkan di dalam messages array
+      const inlineSystemMsg = messages.find((m) => m.role === 'system')?.content
+      const passedSystemPrompt = request.systemPrompt || (typeof inlineSystemMsg === 'string' ? inlineSystemMsg : undefined)
+
+      let resolvedSystem = AGENT_SYSTEM_PROMPT
+      if (passedSystemPrompt) {
+        resolvedSystem = passedSystemPrompt
+      } else if (request.executionMode === 'chat') {
+        resolvedSystem =
+          'Anda adalah Makarya AI Assistant — asisten AI interaktif untuk diskusi, tanya-jawab kode, dan konsultasi pemrograman di Makarya IDE.\n\n' +
+          'STATUS MODE SAAT INI: MODE CHAT (Percakapan & Diskusi)\n' +
+          '- Dalam mode ini, Anda HANYA memberikan penjelasan, saran perbaikan, dan contoh kode dalam format Markdown.\n' +
+          '- Anda TIDAK mengeksekusi tools file/terminal secara otomatis.\n' +
+          '- Jika pengguna menanyakan status mode kerja Anda, jawab dengan ramah bahwa Anda sedang berada di "Mode Chat".'
+      }
+
+      // Tools dimatikan total jika berada di mode 'chat' atau jika disableTools diset true
+      const resolvedTools = (request.executionMode === 'chat' || request.disableTools) ? undefined : agentTools
+
       // Stream text dengan Vercel AI SDK
       const streamResult = streamText({
         model: aiModel,
-        system: AGENT_SYSTEM_PROMPT,
+        system: resolvedSystem,
         messages: formattedMessages,
-        tools: agentTools,
-        stopWhen: isStepCount(40),
+        tools: resolvedTools,
+        stopWhen: resolvedTools ? isStepCount(40) : undefined,
         abortSignal: abortController.signal
       })
 

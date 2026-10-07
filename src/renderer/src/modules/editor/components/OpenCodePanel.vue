@@ -2,6 +2,7 @@
 import { ref, onMounted, nextTick, watch, computed } from 'vue'
 import { useOpenCodeStore } from '@renderer/stores/openCodeStore'
 import { useWorkspaceStore } from '@renderer/stores/workspaceStore'
+import { useSettingsStore } from '@renderer/stores/settingsStore'
 import { parseMarkdownBlocks, formatInlineMarkdown } from '@renderer/utils/markdownParser'
 import OpenCodeModelModal from './OpenCodeModelModal.vue'
 import OpenCodeSessionModal from './OpenCodeSessionModal.vue'
@@ -10,8 +11,10 @@ import iconImg from '@renderer/assets/icon.jpg'
 
 const openCodeStore = useOpenCodeStore()
 const workspaceStore = useWorkspaceStore()
+const settingsStore = useSettingsStore()
 
 const inputText = ref('')
+const inputAreaRef = ref<HTMLTextAreaElement | null>(null)
 const messageContainer = ref<HTMLElement | null>(null)
 const includeActiveFile = ref(true)
 const copiedIndex = ref<string | null>(null)
@@ -62,6 +65,36 @@ function scrollToBottom() {
     }
   })
 }
+
+function adjustTextareaHeight(): void {
+  nextTick(() => {
+    const el = inputAreaRef.value
+    if (!el) return
+
+    el.style.height = 'auto'
+
+    if (!inputText.value || inputText.value.trim() === '') {
+      el.style.height = '22px'
+      el.style.overflowY = 'hidden'
+      return
+    }
+
+    const maxHeight = 160
+    const scrollHeight = el.scrollHeight
+
+    if (scrollHeight > maxHeight) {
+      el.style.height = `${maxHeight}px`
+      el.style.overflowY = 'auto'
+    } else {
+      el.style.height = `${Math.max(22, scrollHeight)}px`
+      el.style.overflowY = 'hidden'
+    }
+  })
+}
+
+watch(inputText, () => {
+  adjustTextareaHeight()
+})
 
 watch(
   () => [
@@ -163,6 +196,7 @@ async function handleSendMessage() {
 
   inputText.value = ''
   attachedImages.value = []
+  adjustTextareaHeight()
   scrollToBottom()
 
   const projectRoot = connectedProject.value?.path || (workspaceStore.activeTab?.filePath
@@ -176,6 +210,62 @@ function handleKeyDown(e: KeyboardEvent) {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
     handleSendMessage()
+  }
+}
+
+function formatMessageTime(timestamp?: number | string): string {
+  if (!timestamp) return ''
+  return settingsStore.formatTimestamp(timestamp)
+}
+
+function handleEditPrompt(content: string) {
+  inputText.value = content
+  adjustTextareaHeight()
+  nextTick(() => {
+    inputAreaRef.value?.focus()
+  })
+}
+
+async function handleResendPrompt(content: string) {
+  if (openCodeStore.isExecuting) return
+  const projectRoot = connectedProject.value?.path || (workspaceStore.activeTab?.filePath
+    ? workspaceStore.activeTab.filePath.substring(0, Math.max(workspaceStore.activeTab.filePath.lastIndexOf('\\'), workspaceStore.activeTab.filePath.lastIndexOf('/')))
+    : (workspaceStore.activeRootPath || (workspaceStore.workspaceRoots && workspaceStore.workspaceRoots.length > 0 ? workspaceStore.workspaceRoots[0].path : undefined)))
+  
+  await openCodeStore.sendPrompt(content, projectRoot)
+}
+
+async function copyMessageContent(content: string, msgId: string) {
+  try {
+    await navigator.clipboard.writeText(content)
+    copiedIndex.value = msgId
+    setTimeout(() => {
+      if (copiedIndex.value === msgId) copiedIndex.value = null
+    }, 2000)
+  } catch (err) {
+    console.warn('Gagal menyalin pesan:', err)
+  }
+}
+
+async function handleRegenerateResponse(messageId: string) {
+  if (openCodeStore.isExecuting) return
+  const msgIdx = openCodeStore.messages.findIndex((m) => m.id === messageId)
+  if (msgIdx < 0) return
+
+  let userPrompt = ''
+  for (let i = msgIdx - 1; i >= 0; i--) {
+    if (openCodeStore.messages[i].role === 'user') {
+      userPrompt = openCodeStore.messages[i].content
+      break
+    }
+  }
+
+  if (userPrompt) {
+    const projectRoot = connectedProject.value?.path || (workspaceStore.activeTab?.filePath
+      ? workspaceStore.activeTab.filePath.substring(0, Math.max(workspaceStore.activeTab.filePath.lastIndexOf('\\'), workspaceStore.activeTab.filePath.lastIndexOf('/')))
+      : (workspaceStore.activeRootPath || (workspaceStore.workspaceRoots && workspaceStore.workspaceRoots.length > 0 ? workspaceStore.workspaceRoots[0].path : undefined)))
+
+    await openCodeStore.sendPrompt(userPrompt, projectRoot)
   }
 }
 
@@ -407,12 +497,20 @@ function getToolSummaryArg(tool: any): string {
           :key="msg.id"
           :class="['flex flex-col space-y-1', msg.role === 'user' ? 'items-end' : 'items-start']"
         >
-        <!-- Role & Time -->
-        <div class="flex items-center gap-1 text-[9px] text-slate-400 px-1">
-          <span v-if="msg.role === 'user'" class="font-medium text-emerald-300">Anda</span>
-          <span v-else class="font-medium text-[#42b883] flex items-center gap-1">
-            <img :src="openCodeLogo" alt="OpenCode" class="size-2.5 rounded-xs object-contain" />
-            OpenCode CLI
+        <!-- Role & Time Header for User -->
+        <div v-if="msg.role === 'user'" class="flex items-center gap-1.5 text-[9px] text-slate-400 px-1 mb-0.5">
+          <span class="font-medium text-emerald-300">Anda</span>
+          <span v-if="msg.timestamp" class="text-[9px] text-slate-400 font-mono">
+            {{ formatMessageTime(msg.timestamp) }}
+          </span>
+        </div>
+
+        <!-- Role & Time Header for Agent -->
+        <div v-else class="flex items-center gap-1.5 text-[9px] text-slate-400 px-1 mb-0.5">
+          <img :src="openCodeLogo" alt="OpenCode" class="size-2.5 rounded-xs object-contain" />
+          <span class="font-medium text-[#42b883]">OpenCode CLI</span>
+          <span v-if="msg.timestamp" class="text-[9px] text-slate-400 font-mono">
+            {{ formatMessageTime(msg.timestamp) }}
           </span>
         </div>
 
@@ -646,6 +744,75 @@ function getToolSummaryArg(tool: any): string {
             </div>
           </div>
         </div>
+
+        <!-- Actions Toolbar Under User Prompt (Resend, Edit, Salin) -->
+        <div
+          v-if="msg.role === 'user'"
+          class="flex items-center justify-end w-full text-[9px] text-slate-400 px-1 pt-0.5"
+        >
+          <div class="flex items-center gap-1 opacity-80 hover:opacity-100 transition-opacity">
+            <button
+              @click="handleResendPrompt(msg.content)"
+              :disabled="openCodeStore.isExecuting"
+              class="px-1.5 py-0.5 rounded-md bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 hover:text-emerald-300 border border-white/[0.06] hover:border-[#42b883]/30 transition-all cursor-pointer flex items-center gap-0.5 active:scale-95 disabled:opacity-40"
+              title="Kirim ulang prompt (Resend)"
+            >
+              <UIcon name="i-lucide-rotate-cw" class="size-2.5" />
+              <span class="text-[8.5px]">Resend</span>
+            </button>
+            <button
+              @click="handleEditPrompt(msg.content)"
+              class="px-1.5 py-0.5 rounded-md bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 hover:text-amber-300 border border-white/[0.06] hover:border-[#42b883]/30 transition-all cursor-pointer flex items-center gap-0.5 active:scale-95"
+              title="Edit prompt di kolom input"
+            >
+              <UIcon name="i-lucide-pencil" class="size-2.5" />
+              <span class="text-[8.5px]">Edit</span>
+            </button>
+            <button
+              @click="copyMessageContent(msg.content, msg.id)"
+              class="px-1.5 py-0.5 rounded-md bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 hover:text-white border border-white/[0.06] hover:border-[#42b883]/30 transition-all cursor-pointer flex items-center gap-0.5 active:scale-95"
+              title="Salin prompt"
+            >
+              <UIcon :name="copiedIndex === msg.id ? 'i-lucide-check' : 'i-lucide-copy'" class="size-2.5" :class="copiedIndex === msg.id ? 'text-emerald-400' : ''" />
+              <span class="text-[8.5px]">{{ copiedIndex === msg.id ? 'Tersalin' : 'Salin' }}</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Actions Toolbar Under Agent Response (Salin, Ulangi) -->
+        <div
+          v-if="msg.role === 'assistant' && msg.content && !msg.isStreaming"
+          class="flex items-center justify-between w-full text-[9px] text-slate-400 px-1 pt-0.5"
+        >
+          <div class="flex items-center gap-1.5">
+            <!-- Salin Response Button -->
+            <button
+              @click="copyMessageContent(msg.content, msg.id)"
+              class="px-2 py-0.5 rounded-md bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 hover:text-[#42b883] border border-white/[0.06] hover:border-[#42b883]/30 transition-all cursor-pointer flex items-center gap-1 active:scale-95"
+              title="Salin isi seluruh respon agen"
+            >
+              <UIcon :name="copiedIndex === msg.id ? 'i-lucide-check' : 'i-lucide-copy'" class="size-2.5" :class="copiedIndex === msg.id ? 'text-emerald-400' : ''" />
+              <span class="text-[8.5px] font-medium">{{ copiedIndex === msg.id ? 'Tersalin' : 'Salin' }}</span>
+            </button>
+
+            <!-- Ulangi / Regenerate Response Button -->
+            <button
+              @click="handleRegenerateResponse(msg.id)"
+              :disabled="openCodeStore.isExecuting"
+              class="px-2 py-0.5 rounded-md bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 hover:text-emerald-300 border border-white/[0.06] hover:border-[#42b883]/30 transition-all cursor-pointer flex items-center gap-1 active:scale-95 disabled:opacity-40"
+              title="Buat ulang respon ini (Regenerate)"
+            >
+              <UIcon name="i-lucide-rotate-cw" class="size-2.5" />
+              <span class="text-[8.5px] font-medium">Ulangi</span>
+            </button>
+          </div>
+
+          <div class="flex items-center gap-1.5 text-[8.5px] text-slate-400 font-mono">
+            <span class="px-1.5 py-0.2 rounded bg-white/[0.03] border border-white/[0.05] text-slate-400">
+              {{ openCodeStore.currentModel }}
+            </span>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -696,14 +863,16 @@ function getToolSummaryArg(tool: any): string {
           </div>
         </div>
 
-        <!-- Textarea (Antigravity Style) -->
-        <div class="relative min-h-[24px]">
+        <!-- Textarea (Antigravity Style with Auto-Adjust Height) -->
+        <div class="relative w-full">
           <textarea
+            ref="inputAreaRef"
             v-model="inputText"
+            @input="adjustTextareaHeight"
             @keydown="handleKeyDown"
             placeholder="Ask anything, tag code (Ctrl+L), paste (Ctrl+V), @, /"
             rows="1"
-            class="w-full bg-transparent border-none text-[11px] text-slate-100 placeholder:text-slate-500 focus:outline-none resize-none p-0 leading-relaxed font-sans min-h-[22px] max-h-[160px] custom-scrollbar"
+            class="w-full bg-transparent border-none text-[11px] text-slate-100 placeholder:text-slate-500 focus:outline-none resize-none p-0 leading-relaxed font-sans min-h-[22px] max-h-[160px] custom-scrollbar overflow-y-hidden"
           ></textarea>
         </div>
 
