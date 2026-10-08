@@ -68,6 +68,106 @@ function getStatusLetter(status: string): string {
   }
 }
 
+function getProjectRoot(): string {
+  return (
+    workspaceStore.activeRootPath ||
+    (workspaceStore.workspaceRoots.length > 0 ? workspaceStore.workspaceRoots[0].path : '')
+  )
+}
+
+function getProjectName(): string {
+  const rootPath = getProjectRoot()
+  if (rootPath) {
+    const matchingRoot = workspaceStore.workspaceRoots.find((r) => {
+      const normRoot = r.path.replace(/\\/g, '/').toLowerCase()
+      const normProject = rootPath.replace(/\\/g, '/').toLowerCase()
+      return normRoot === normProject
+    })
+    if (matchingRoot) return matchingRoot.name
+    return rootPath.split(/[/\\]/).filter(Boolean).pop() || ''
+  }
+  return ''
+}
+
+function getFullFilePath(relativePath: string): string {
+  const rootPath = getProjectRoot()
+  if (rootPath) {
+    const normRoot = rootPath.replace(/[/\\]+$/, '')
+    const cleanRel = relativePath.replace(/^[/\\]+/, '')
+    return `${normRoot}\\${cleanRel}`.replace(/\//g, '\\')
+  }
+  return relativePath
+}
+
+function getStatusLabel(status: string): string {
+  switch (status) {
+    case 'modified':
+      return 'Modified'
+    case 'added':
+      return 'Added (Staged)'
+    case 'deleted':
+      return 'Deleted'
+    case 'untracked':
+      return 'Untracked'
+    case 'renamed':
+      return 'Renamed'
+    default:
+      return status.toUpperCase()
+  }
+}
+
+const hoverTooltip = ref<{ file: GitFileItem; right: number; top: number } | null>(null)
+let fileHoverTimer: ReturnType<typeof setTimeout> | null = null
+
+function handleFileMouseEnter(file: GitFileItem, event: MouseEvent): void {
+  if (fileHoverTimer) clearTimeout(fileHoverTimer)
+  const target = event.currentTarget as HTMLElement
+  if (!target) return
+
+  fileHoverTimer = setTimeout(() => {
+    const panelEl = target.closest('aside') || target
+    const panelRect = panelEl.getBoundingClientRect()
+    const targetRect = target.getBoundingClientRect()
+
+    // Align right edge of tooltip precisely 10px to the left of the Source Control panel
+    const right = Math.max(12, window.innerWidth - panelRect.left + 10)
+    const top = Math.max(10, Math.min(targetRect.top - 4, window.innerHeight - 90))
+    hoverTooltip.value = { file, right, top }
+  }, 180)
+}
+
+function handleFileMouseLeave(): void {
+  if (fileHoverTimer) {
+    clearTimeout(fileHoverTimer)
+    fileHoverTimer = null
+  }
+  hoverTooltip.value = null
+}
+
+const actionTooltip = ref<{ text: string; shortcut?: string; right: number; top: number } | null>(null)
+let actionHoverTimer: ReturnType<typeof setTimeout> | null = null
+
+function showActionTooltip(text: string, event: MouseEvent, shortcut?: string): void {
+  if (actionHoverTimer) clearTimeout(actionHoverTimer)
+  const target = event.currentTarget as HTMLElement
+  if (!target) return
+
+  actionHoverTimer = setTimeout(() => {
+    const rect = target.getBoundingClientRect()
+    const top = rect.top < 100 ? rect.bottom + 6 : Math.max(10, rect.top - 28)
+    const right = Math.max(12, window.innerWidth - rect.right + 4)
+    actionTooltip.value = { text, shortcut, right, top }
+  }, 120)
+}
+
+function hideActionTooltip(): void {
+  if (actionHoverTimer) {
+    clearTimeout(actionHoverTimer)
+    actionHoverTimer = null
+  }
+  actionTooltip.value = null
+}
+
 function handleCommitKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
     e.preventDefault()
@@ -90,12 +190,13 @@ function handleCommitKeydown(e: KeyboardEvent) {
         <span class="text-xs font-bold text-white uppercase tracking-wider truncate">Source Control</span>
       </div>
 
-      <div class="flex items-center gap-1 flex-shrink-0">
+      <div class="flex items-center gap-1.5 flex-shrink-0">
         <!-- Branch Badge Pill -->
         <span
           v-if="gitStore.isGitRepo"
-          class="px-2 py-0.5 rounded-md bg-emerald-500/10 border border-emerald-500/25 text-[10px] text-emerald-400 font-mono truncate max-w-[100px]"
-          :title="`Branch: ${gitStore.branch}`"
+          @mouseenter="showActionTooltip(`Branch: ${gitStore.branch}`, $event)"
+          @mouseleave="hideActionTooltip"
+          class="px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/25 text-[10px] text-emerald-400 font-mono truncate max-w-[100px] cursor-default"
         >
           {{ gitStore.branch }}
         </span>
@@ -104,37 +205,49 @@ function handleCommitKeydown(e: KeyboardEvent) {
         <button
           @click="gitStore.refreshStatus()"
           :disabled="gitStore.isLoadingStatus"
-          class="w-6 h-6 rounded-md hover:bg-white/10 flex items-center justify-center text-slate-400 hover:text-white transition-colors cursor-pointer disabled:opacity-40"
-          title="Refresh Git Status"
+          @mouseenter="showActionTooltip('Refresh Status Git', $event)"
+          @mouseleave="hideActionTooltip"
+          class="w-6 h-6 rounded-full hover:bg-white/10 flex items-center justify-center text-slate-400 hover:text-white transition-colors cursor-pointer disabled:opacity-40"
         >
           <UIcon name="i-lucide-rotate-cw" class="size-3.5" :class="{ 'animate-spin': gitStore.isLoadingStatus }" />
         </button>
 
-        <!-- Push Button -->
+        <!-- Push Button (Green when commits are ready to push) -->
         <button
           @click="gitStore.push()"
           :disabled="gitStore.isPushing"
-          class="w-6 h-6 rounded-md hover:bg-white/10 flex items-center justify-center text-slate-400 hover:text-emerald-400 transition-colors cursor-pointer disabled:opacity-40"
-          title="Git Push (Upload ke Remote)"
+          @mouseenter="showActionTooltip(gitStore.ahead > 0 ? `Git Push (${gitStore.ahead} commit siap di-push)` : 'Git Push (Upload ke Remote)', $event)"
+          @mouseleave="hideActionTooltip"
+          class="h-6 px-2.5 rounded-full flex items-center justify-center gap-1 transition-all cursor-pointer disabled:opacity-40"
+          :class="gitStore.ahead > 0
+            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30 ring-1 ring-emerald-500/20 shadow-xs'
+            : 'text-slate-400 hover:text-emerald-400 hover:bg-white/10'"
         >
           <UIcon name="i-lucide-arrow-up" class="size-3.5" :class="{ 'animate-bounce': gitStore.isPushing }" />
+          <span v-if="gitStore.ahead > 0" class="text-[9px] font-mono font-bold leading-none">{{ gitStore.ahead }}</span>
         </button>
 
-        <!-- Pull Button -->
+        <!-- Pull Button (Red when behind / new commits on remote) -->
         <button
           @click="gitStore.pull()"
           :disabled="gitStore.isPulling"
-          class="w-6 h-6 rounded-md hover:bg-white/10 flex items-center justify-center text-slate-400 hover:text-sky-400 transition-colors cursor-pointer disabled:opacity-40"
-          title="Git Pull (Download dari Remote)"
+          @mouseenter="showActionTooltip(gitStore.behind > 0 ? `Git Pull (${gitStore.behind} commit baru di remote)` : 'Git Pull (Download dari Remote)', $event)"
+          @mouseleave="hideActionTooltip"
+          class="h-6 px-2.5 rounded-full flex items-center justify-center gap-1 transition-all cursor-pointer disabled:opacity-40"
+          :class="gitStore.behind > 0
+            ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 ring-1 ring-rose-500/20 animate-pulse shadow-xs'
+            : 'text-slate-400 hover:text-sky-400 hover:bg-white/10'"
         >
           <UIcon name="i-lucide-arrow-down" class="size-3.5" :class="{ 'animate-bounce': gitStore.isPulling }" />
+          <span v-if="gitStore.behind > 0" class="text-[9px] font-mono font-bold leading-none">{{ gitStore.behind }}</span>
         </button>
 
         <!-- Close / Collapse Panel Button -->
         <button
           @click="workspaceStore.toggleSourceControlPanel()"
-          class="w-6 h-6 rounded-md flex items-center justify-center text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
-          title="Tutup Panel Source Control"
+          @mouseenter="showActionTooltip('Tutup Panel Source Control', $event)"
+          @mouseleave="hideActionTooltip"
+          class="w-6 h-6 rounded-full flex items-center justify-center text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
         >
           <UIcon name="i-lucide-x" class="size-3.5" />
         </button>
@@ -176,8 +289,9 @@ function handleCommitKeydown(e: KeyboardEvent) {
             <button
               @click="gitStore.generateCommitMessage()"
               :disabled="gitStore.isGeneratingMessage"
-              class="px-2 py-1 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 active:bg-emerald-500/30 border border-emerald-500/25 hover:border-emerald-500/40 text-emerald-300 hover:text-emerald-200 text-[10px] font-medium flex items-center gap-1.5 transition-all cursor-pointer shadow-xs disabled:opacity-40 disabled:cursor-not-allowed group"
-              title="Buat pesan commit otomatis dari diff dengan AI (Alt+G)"
+              @mouseenter="showActionTooltip('Buat pesan commit otomatis dari diff dengan AI', $event, 'Alt+G')"
+              @mouseleave="hideActionTooltip"
+              class="px-2.5 py-1 rounded-full bg-emerald-500/10 hover:bg-emerald-500/20 active:bg-emerald-500/30 border border-emerald-500/25 hover:border-emerald-500/40 text-emerald-300 hover:text-emerald-200 text-[10px] font-medium flex items-center gap-1.5 transition-all cursor-pointer shadow-xs disabled:opacity-40 disabled:cursor-not-allowed group"
             >
               <UIcon
                 name="i-lucide-sparkles"
@@ -193,8 +307,9 @@ function handleCommitKeydown(e: KeyboardEvent) {
               <button
                 v-if="gitStore.commitMessage.trim()"
                 @click="gitStore.commitMessage = ''"
+                @mouseenter="showActionTooltip('Hapus pesan commit', $event)"
+                @mouseleave="hideActionTooltip"
                 class="w-4 h-4 rounded flex items-center justify-center text-slate-500 hover:text-rose-400 transition-colors cursor-pointer"
-                title="Hapus teks commit"
               >
                 <UIcon name="i-lucide-x" class="size-2.5" />
               </button>
@@ -242,8 +357,9 @@ function handleCommitKeydown(e: KeyboardEvent) {
             <div v-if="gitStore.staged.length > 0" class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
               <button
                 @click.stop="gitStore.unstageAll()"
+                @mouseenter="showActionTooltip('Unstage semua perubahan (-)', $event)"
+                @mouseleave="hideActionTooltip"
                 class="w-5 h-5 rounded hover:bg-white/10 flex items-center justify-center text-slate-400 hover:text-white cursor-pointer"
-                title="Unstage All Changes (-)"
               >
                 <UIcon name="i-lucide-minus" class="size-3" />
               </button>
@@ -257,6 +373,8 @@ function handleCommitKeydown(e: KeyboardEvent) {
                 v-for="file in gitStore.staged"
                 :key="file.path"
                 @click="gitStore.openFileDiff(file, true)"
+                @mouseenter="handleFileMouseEnter(file, $event)"
+                @mouseleave="handleFileMouseLeave"
                 class="flex items-center justify-between px-2 py-1 rounded-lg hover:bg-white/[0.05] border border-transparent hover:border-white/[0.06] cursor-pointer group transition-all"
               >
                 <!-- File Name & Dir -->
@@ -276,8 +394,9 @@ function handleCommitKeydown(e: KeyboardEvent) {
                   <div class="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                     <button
                       @click.stop="gitStore.unstageFile(file.path)"
+                      @mouseenter="showActionTooltip('Unstage file ini (-)', $event)"
+                      @mouseleave="hideActionTooltip"
                       class="w-5 h-5 rounded hover:bg-white/10 flex items-center justify-center text-slate-400 hover:text-white cursor-pointer"
-                      title="Unstage file ini"
                     >
                       <UIcon name="i-lucide-minus" class="size-3" />
                     </button>
@@ -322,15 +441,17 @@ function handleCommitKeydown(e: KeyboardEvent) {
             <div v-if="gitStore.unstaged.length > 0 || gitStore.untracked.length > 0" class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
               <button
                 @click.stop="gitStore.discardAll()"
+                @mouseenter="showActionTooltip('Batalkan semua perubahan (Discard)', $event)"
+                @mouseleave="hideActionTooltip"
                 class="w-5 h-5 rounded hover:bg-rose-500/20 hover:text-rose-400 flex items-center justify-center text-slate-400 cursor-pointer"
-                title="Discard All Changes (Batalkan semua perubahan)"
               >
                 <UIcon name="i-lucide-undo-2" class="size-3" />
               </button>
               <button
                 @click.stop="gitStore.stageAll()"
+                @mouseenter="showActionTooltip('Stage semua perubahan (+)', $event)"
+                @mouseleave="hideActionTooltip"
                 class="w-5 h-5 rounded hover:bg-emerald-500/20 hover:text-emerald-400 flex items-center justify-center text-slate-400 cursor-pointer"
-                title="Stage All Changes (+)"
               >
                 <UIcon name="i-lucide-plus" class="size-3" />
               </button>
@@ -345,6 +466,8 @@ function handleCommitKeydown(e: KeyboardEvent) {
                 v-for="file in [...gitStore.unstaged, ...gitStore.untracked]"
                 :key="file.path"
                 @click="gitStore.openFileDiff(file, false)"
+                @mouseenter="handleFileMouseEnter(file, $event)"
+                @mouseleave="handleFileMouseLeave"
                 class="flex items-center justify-between px-2 py-1 rounded-lg hover:bg-white/[0.05] border border-transparent hover:border-white/[0.06] cursor-pointer group transition-all"
               >
                 <!-- File Name & Dir -->
@@ -365,16 +488,18 @@ function handleCommitKeydown(e: KeyboardEvent) {
                     <!-- Discard File -->
                     <button
                       @click.stop="gitStore.discardFile(file)"
+                      @mouseenter="showActionTooltip('Batalkan perubahan file ini (Discard)', $event)"
+                      @mouseleave="hideActionTooltip"
                       class="w-5 h-5 rounded hover:bg-rose-500/20 hover:text-rose-400 flex items-center justify-center text-slate-400 cursor-pointer"
-                      title="Batalkan perubahan file ini (Discard)"
                     >
                       <UIcon name="i-lucide-undo-2" class="size-3" />
                     </button>
                     <!-- Stage File -->
                     <button
                       @click.stop="gitStore.stageFile(file.path)"
+                      @mouseenter="showActionTooltip('Stage file ini (+)', $event)"
+                      @mouseleave="hideActionTooltip"
                       class="w-5 h-5 rounded hover:bg-emerald-500/20 hover:text-emerald-400 flex items-center justify-center text-slate-400 cursor-pointer"
-                      title="Stage file ini (+)"
                     >
                       <UIcon name="i-lucide-plus" class="size-3" />
                     </button>
@@ -401,6 +526,92 @@ function handleCommitKeydown(e: KeyboardEvent) {
 
     <!-- Independent Git Diff Modal Viewer -->
     <GitDiffModal />
+
+    <!-- Dark Glassmorphism Nuxt UI Style Tooltip for Source Control Files -->
+    <Teleport to="body">
+      <Transition
+        enter-active-class="transition duration-150 ease-out"
+        enter-from-class="opacity-0 -translate-x-1 scale-95"
+        enter-to-class="opacity-100 translate-x-0 scale-100"
+        leave-active-class="transition duration-100 ease-in"
+        leave-from-class="opacity-100 translate-x-0 scale-100"
+        leave-to-class="opacity-0 -translate-x-1 scale-95"
+      >
+        <div
+          v-if="hoverTooltip && hoverTooltip.file"
+          class="fixed z-[9999] pointer-events-none px-3 py-2 rounded-xl bg-[#090e17]/95 backdrop-blur-2xl border border-white/[0.14] shadow-[0_15px_35px_-5px_rgba(0,0,0,0.8)] flex flex-col gap-1.5 min-w-[260px] max-w-md ring-1 ring-white/[0.08]"
+          :style="{
+            right: `${hoverTooltip.right}px`,
+            top: `${hoverTooltip.top}px`
+          }"
+        >
+          <!-- Header: File Name + Status Badge & Project Badge -->
+          <div class="flex items-center justify-between gap-3">
+            <div class="flex items-center gap-1.5 min-w-0">
+              <UIcon
+                :name="getNuxtFileIcon(hoverTooltip.file.path).icon"
+                :class="[getNuxtFileIcon(hoverTooltip.file.path).colorClass, 'size-3.5 flex-shrink-0']"
+              />
+              <span class="text-xs font-semibold text-white font-mono truncate">{{ getFileName(hoverTooltip.file.path) }}</span>
+            </div>
+
+            <div class="flex items-center gap-1.5 flex-shrink-0">
+              <!-- Git Status Tag -->
+              <span
+                :class="[
+                  'text-[9px] font-bold px-1.5 py-0.2 rounded border font-mono uppercase tracking-wider',
+                  getStatusBadgeClass(hoverTooltip.file.status)
+                ]"
+              >
+                {{ getStatusLabel(hoverTooltip.file.status) }}
+              </span>
+
+              <!-- Project Name Badge -->
+              <span
+                v-if="getProjectName()"
+                class="px-1.5 py-0.2 rounded-md bg-[#42b883]/15 border border-[#42b883]/30 text-[#42b883] font-mono text-[9px] font-bold uppercase tracking-wider"
+              >
+                {{ getProjectName() }}
+              </span>
+            </div>
+          </div>
+
+          <!-- Full File Path -->
+          <div class="text-[10.5px] text-slate-400 font-mono break-all leading-tight select-none border-t border-white/[0.06] pt-1">
+            {{ getFullFilePath(hoverTooltip.file.path) }}
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
+
+    <!-- Dark Glassmorphism Action Tooltip for Header & Action Buttons -->
+    <Teleport to="body">
+      <Transition
+        enter-active-class="transition duration-100 ease-out"
+        enter-from-class="opacity-0 translate-y-1 scale-95"
+        enter-to-class="opacity-100 translate-y-0 scale-100"
+        leave-active-class="transition duration-75 ease-in"
+        leave-from-class="opacity-100 translate-y-0 scale-100"
+        leave-to-class="opacity-0 translate-y-1 scale-95"
+      >
+        <div
+          v-if="actionTooltip"
+          class="fixed z-[9999] pointer-events-none px-2.5 py-1.5 rounded-lg bg-[#090e17]/95 backdrop-blur-2xl border border-white/[0.14] shadow-[0_10px_25px_-5px_rgba(0,0,0,0.8)] flex items-center gap-2 ring-1 ring-white/[0.08]"
+          :style="{
+            right: `${actionTooltip.right}px`,
+            top: `${actionTooltip.top}px`
+          }"
+        >
+          <span class="text-[11px] font-medium text-slate-200 whitespace-nowrap">{{ actionTooltip.text }}</span>
+          <span
+            v-if="actionTooltip.shortcut"
+            class="text-[9px] px-1 py-0.2 rounded bg-white/10 text-slate-300 font-mono"
+          >
+            {{ actionTooltip.shortcut }}
+          </span>
+        </div>
+      </Transition>
+    </Teleport>
   </aside>
 </template>
 

@@ -73,14 +73,12 @@ export class ClaudeCliService {
     const discovered: ClaudeDiscoveredModel[] = []
     const seenIds = new Set<string>()
 
-    // Default built-in curated Claude models
+    // Default built-in curated Claude models (Official Anthropic)
     const defaultCurated: ClaudeDiscoveredModel[] = [
-      { id: 'ag/claude-sonnet-4-6', name: 'Claude Sonnet 4.6', provider: 'Anthropic', category: 'Claude Recommended', isFree: false, source: '9router' },
-      { id: 'claude-3-7-sonnet-20250219', name: 'Claude 3.7 Sonnet (Thinking)', provider: 'Anthropic', category: 'Claude Recommended', isFree: false, source: '9router' },
-      { id: 'claude-3-5-sonnet-20241022', name: 'Claude 3.5 Sonnet v2', provider: 'Anthropic', category: 'Claude 3.5 Series', isFree: false, source: '9router' },
-      { id: 'claude-3-5-haiku-20241022', name: 'Claude 3.5 Haiku', provider: 'Anthropic', category: 'Claude 3.5 Series', isFree: true, source: '9router' },
-      { id: 'claude-3-opus-20240229', name: 'Claude 3 Opus', provider: 'Anthropic', category: 'Claude Legacy', isFree: false, source: '9router' },
-      { id: 'Antigravity', name: 'Antigravity Router', provider: 'Antigravity', category: 'Recent', isFree: true, source: '9router' }
+      { id: 'claude-3-7-sonnet-20250219', name: 'Claude 3.7 Sonnet (Thinking)', provider: 'Anthropic', category: 'Claude Recommended', isFree: false, source: 'claude_config' },
+      { id: 'claude-3-5-sonnet-20241022', name: 'Claude 3.5 Sonnet v2', provider: 'Anthropic', category: 'Claude 3.5 Series', isFree: false, source: 'claude_config' },
+      { id: 'claude-3-5-haiku-20241022', name: 'Claude 3.5 Haiku', provider: 'Anthropic', category: 'Claude 3.5 Series', isFree: true, source: 'claude_config' },
+      { id: 'claude-3-opus-20240229', name: 'Claude 3 Opus', provider: 'Anthropic', category: 'Claude Legacy', isFree: false, source: 'claude_config' }
     ]
 
     for (const d of defaultCurated) {
@@ -88,11 +86,12 @@ export class ClaudeCliService {
       discovered.push(d)
     }
 
-    // 1. Read Claude Config (~/.claude/config.json, ~/.claude.json, etc.)
+    // 1. Read Claude Config (~/.claude/config.json, ~/.claude.json, ~/.claude/settings.json, etc.)
     const possibleConfigPaths = [
       join(homedir(), '.claude', 'config.json'),
       join(homedir(), '.config', 'claude', 'config.json'),
       join(homedir(), '.claude.json'),
+      join(homedir(), '.claude', 'settings.json'),
       join(process.env.APPDATA || '', 'Claude', 'config.json')
     ]
 
@@ -102,6 +101,7 @@ export class ClaudeCliService {
           const raw = readFileSync(cfgPath, 'utf-8')
           const parsed = parseJsonc(raw)
           if (parsed && typeof parsed === 'object') {
+            // Models array
             if (Array.isArray(parsed.models)) {
               for (const m of parsed.models) {
                 const modelId = typeof m === 'string' ? m : m.id || m.name
@@ -110,13 +110,46 @@ export class ClaudeCliService {
                   discovered.push({
                     id: modelId,
                     name: formatModelDisplayName(modelId),
-                    provider: 'Anthropic',
+                    provider: 'Custom',
                     category: 'Config',
                     isFree: false,
                     source: 'claude_config'
                   })
                 }
               }
+            }
+            // Custom models list / object
+            if (parsed.custom_models) {
+              const list = Array.isArray(parsed.custom_models)
+                ? parsed.custom_models
+                : Object.keys(parsed.custom_models)
+              for (const m of list) {
+                const modelId = typeof m === 'string' ? m : (m as any).id || (m as any).name
+                if (modelId && !seenIds.has(modelId)) {
+                  seenIds.add(modelId)
+                  discovered.push({
+                    id: modelId,
+                    name: formatModelDisplayName(modelId),
+                    provider: 'Custom',
+                    category: 'Config',
+                    isFree: false,
+                    source: 'claude_config'
+                  })
+                }
+              }
+            }
+            // Preferred / Selected model
+            const prefModel = parsed.preferredModel || parsed.model
+            if (prefModel && typeof prefModel === 'string' && !seenIds.has(prefModel)) {
+              seenIds.add(prefModel)
+              discovered.push({
+                id: prefModel,
+                name: formatModelDisplayName(prefModel),
+                provider: 'Custom',
+                category: 'Config',
+                isFree: false,
+                source: 'claude_config'
+              })
             }
           }
         } catch (err) {
@@ -165,14 +198,15 @@ export class ClaudeCliService {
         for (const gModel of gatewayModels) {
           if (!seenIds.has(gModel)) {
             const isClaude = gModel.toLowerCase().includes('claude') || gModel.toLowerCase().includes('anthropic')
-            if (isClaude) {
+            const isAntigravity = gModel.toLowerCase().includes('antigravity') || gModel.startsWith('ag/')
+            if (isClaude || isAntigravity) {
               seenIds.add(gModel)
               discovered.push({
                 id: gModel,
                 name: formatModelDisplayName(gModel),
-                provider: 'Anthropic',
-                category: 'Claude Gateway',
-                isFree: gModel.includes('haiku') || gModel.includes('free'),
+                provider: isAntigravity ? 'Antigravity' : 'Anthropic',
+                category: isAntigravity ? 'Recent' : 'Claude Gateway',
+                isFree: gModel.includes('haiku') || gModel.includes('free') || isAntigravity,
                 source: '9router'
               })
             }
@@ -236,7 +270,7 @@ PANDUAN MODE AGENT:
       ]
 
       // Determine model to use
-      const chosenModel = model || 'ag/claude-sonnet-4-6'
+      const chosenModel = model || 'claude-3-7-sonnet-20250219'
 
       await this.aiAgentService.streamChat(
         {

@@ -84,10 +84,6 @@ function handleClose(): void {
           <div>
             <h2 class="text-sm font-semibold text-white tracking-wide flex items-center gap-2">
               Pengelola Plugin Makarya IDE
-              <span
-                class="text-[10px] bg-[#42b883]/20 text-[#42b883] px-2 py-0.5 rounded-full font-mono border border-[#42b883]/30">
-                SDK v1.0
-              </span>
             </h2>
             <p class="text-xs text-slate-400">Kelola dan kembangkan plugin kustom asli untuk Makarya IDE.</p>
           </div>
@@ -184,7 +180,6 @@ function handleClose(): void {
                   <div class="flex-1">
                     <div class="flex items-center gap-2">
                       <h3 class="text-xs font-semibold text-white">{{ p.manifest.name }}</h3>
-                      <span class="text-[10px] text-slate-400 font-mono">v{{ p.manifest.version }}</span>
                       <span class="text-[9px] px-1.5 py-0.2 rounded border font-mono uppercase" :class="p.source === 'builtin'
                           ? 'bg-blue-500/10 text-blue-400 border-blue-500/20'
                           : 'bg-purple-500/10 text-purple-400 border-purple-500/20'

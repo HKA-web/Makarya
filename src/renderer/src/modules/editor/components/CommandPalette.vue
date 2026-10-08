@@ -48,6 +48,17 @@ const commandList: CommandItem[] = [
     }
   },
   {
+    id: 'cmd-find-in-files',
+    title: 'Pencarian Kode Global (Find in Files)...',
+    category: 'Pencarian',
+    icon: 'i-lucide-search',
+    shortcut: 'Ctrl+Shift+F',
+    action: () => {
+      workspaceStore.isCommandPaletteVisible = false
+      workspaceStore.openGlobalSearch()
+    }
+  },
+  {
     id: 'cmd-tab-switcher',
     title: 'Pindah Tab Aktif (Tab Switcher)...',
     category: 'Navigasi',

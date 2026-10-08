@@ -45,14 +45,20 @@ class TerminalService {
           if (options.shell === 'cmd') {
             shellExecutable = process.env.COMSPEC || 'cmd.exe'
           } else if (options.shell === 'bash') {
-            // Check Git Bash standard location
+            // Check Git Bash and WSL standard locations
+            const localAppData = process.env.LOCALAPPDATA || ''
             const gitBashPaths = [
               'C:\\Program Files\\Git\\bin\\bash.exe',
-              'C:\\Program Files (x86)\\Git\\bin\\bash.exe'
+              'C:\\Program Files (x86)\\Git\\bin\\bash.exe',
+              resolve(localAppData, 'Programs', 'Git', 'bin', 'bash.exe'),
+              'C:\\Git\\bin\\bash.exe',
+              'C:\\Git\\usr\\bin\\bash.exe'
             ]
             const foundBash = gitBashPaths.find((p) => existsSync(p))
             if (foundBash) {
               shellExecutable = foundBash
+            } else {
+              shellExecutable = 'bash.exe'
             }
           }
 

@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, computed, watch, onUnmounted, nextTick } from 'vue'
-import Dialog from 'primevue/dialog'
 import { useWorkspaceStore } from '@renderer/stores/workspaceStore'
 import { useAgentStore } from '@renderer/stores/agentStore'
 import { getNuxtFileIcon } from '@renderer/utils/languageDetector'
@@ -12,6 +11,10 @@ const searchKeyword = ref('')
 const debouncedKeyword = ref('')
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 
+// Pagination State (100 files per page)
+const PAGE_SIZE = 100
+const currentPage = ref(1)
+
 watch(searchKeyword, (val) => {
   if (debounceTimer) {
     clearTimeout(debounceTimer)
@@ -20,13 +23,15 @@ watch(searchKeyword, (val) => {
   // Instant update for empty keyword or prefix command modes (>, :, @)
   if (!val || val.startsWith('>') || val.startsWith(':') || val.startsWith('@')) {
     debouncedKeyword.value = val
+    currentPage.value = 1
     return
   }
-  // Debounce regular file fuzzy search by 100ms for lightweight, lag-free typing
+  // Debounce regular file fuzzy search by 80ms for lightweight, lag-free typing
   debounceTimer = setTimeout(() => {
     debouncedKeyword.value = val
+    currentPage.value = 1
     debounceTimer = null
-  }, 100)
+  }, 80)
 })
 
 onUnmounted(() => {
@@ -46,6 +51,7 @@ function flushDebounce(): void {
 
 const selectedIndex = ref(0)
 const searchInputRef = ref<HTMLInputElement | null>(null)
+const listContainerRef = ref<HTMLElement | null>(null)
 const isLoadingFiles = ref(false)
 
 interface IndexedFile {
@@ -85,6 +91,17 @@ const commandList: CommandItem[] = [
     shortcut: 'Ctrl+E',
     action: () => {
       searchKeyword.value = ''
+    }
+  },
+  {
+    id: 'cmd-global-search',
+    title: 'Pencarian Kode Global (Find in Files)...',
+    category: 'Navigasi',
+    icon: 'i-lucide-search',
+    shortcut: 'Ctrl+Shift+F',
+    action: () => {
+      workspaceStore.closeQuickOpen()
+      workspaceStore.openGlobalSearch()
     }
   },
   {
@@ -281,7 +298,7 @@ const commandList: CommandItem[] = [
   },
   {
     id: 'cmd-about-makarya',
-    title: 'Tentang Makarya App (About)',
+    title: 'Tentang Makarya IDE (About)',
     category: 'Bantuan',
     icon: 'i-lucide-info',
     action: () => {
@@ -326,9 +343,13 @@ const cleanFileQuery = computed(() => {
   return q.trim()
 })
 
-// Ambil seluruh daftar file dari semua project yang dibuka
+// Ambil seluruh daftar file dari semua project yang dibuka (bertenaga Ripgrep native)
 async function refreshWorkspaceFiles(): Promise<void> {
   const rootPaths = workspaceStore.workspaceRoots.map((r) => r.path)
+  if (rootPaths.length === 0 && workspaceStore.activeRootPath) {
+    rootPaths.push(workspaceStore.activeRootPath)
+  }
+
   if (rootPaths.length === 0 || !window.makaryaAPI?.searchWorkspaceFiles) {
     allProjectFiles.value = []
     return
@@ -409,38 +430,25 @@ const filteredCommands = computed<CommandItem[]>(() => {
   )
 })
 
-// Advanced Antigravity-Style Fuzzy Scoring
-function calculateFuzzyScore(file: IndexedFile, query: string): number {
-  const fileName = file.name.toLowerCase()
-  const relPath = file.relativePath.toLowerCase()
-  const fullSearch = (file.rootName ? file.rootName.toLowerCase() + '/' : '') + relPath
-
-  // Exact file name match
-  if (fileName === query) return 2000
-
-  // File name starts with query
-  if (fileName.startsWith(query)) return 1500
-
-  // File name includes exact query
-  const fnIdx = fileName.indexOf(query)
-  if (fnIdx !== -1) {
-    return 1000 - fnIdx * 10
+// Acronym scoring for CamelCase & snake_case (e.g. "kc" -> "KantinController")
+function scoreAcronym(text: string, query: string): number {
+  const parts = text.split(/[-_.\s]+|(?=[A-Z])/)
+  const initials = parts.map((p) => p[0]?.toLowerCase()).filter(Boolean).join('')
+  if (initials.includes(query)) {
+    return 300 - initials.indexOf(query) * 20
   }
+  return 0
+}
 
-  // Relative path includes query (e.g. "payroll/detail")
-  const pathIdx = fullSearch.indexOf(query)
-  if (pathIdx !== -1) {
-    return 800 - pathIdx * 5
-  }
-
-  // Subsequence match across path (e.g. "wbm" -> "WelcomeModule.vue")
+// Subsequence matching within a single string
+function scoreSubsequence(text: string, query: string): number {
   let qIdx = 0
   let score = 0
   let consecutive = 0
   let prevMatchedIdx = -10
 
-  for (let i = 0; i < fullSearch.length && qIdx < query.length; i++) {
-    const char = fullSearch[i]
+  for (let i = 0; i < text.length && qIdx < query.length; i++) {
+    const char = text[i]
     if (char === query[qIdx]) {
       qIdx++
       score += 20
@@ -453,14 +461,9 @@ function calculateFuzzyScore(file: IndexedFile, query: string): number {
         consecutive = 0
       }
 
-      // Word boundary bonuses: after slash, dot, underscore, hyphen
-      if (i === 0 || fullSearch[i - 1] === '/' || fullSearch[i - 1] === '\\' || fullSearch[i - 1] === '.' || fullSearch[i - 1] === '_' || fullSearch[i - 1] === '-') {
-        score += 40
-      }
-
-      // Bonus if matched inside the filename itself
-      if (i >= fullSearch.length - fileName.length) {
-        score += 30
+      // Word boundary bonus (after ., -, _, /, \)
+      if (i === 0 || text[i - 1] === '/' || text[i - 1] === '\\' || text[i - 1] === '.' || text[i - 1] === '_' || text[i - 1] === '-') {
+        score += 35
       }
 
       prevMatchedIdx = i
@@ -474,8 +477,61 @@ function calculateFuzzyScore(file: IndexedFile, query: string): number {
   return 0
 }
 
-// Logika cerdas fuzzy search & recent files
-const filteredFiles = computed<IndexedFile[]>(() => {
+// Strict File Name Matching with Smart Fallback for Path Queries
+function calculateFuzzyScore(file: IndexedFile, query: string): number {
+  if (!query) return 0
+  const fileName = file.name.toLowerCase()
+  const hasSlash = query.includes('/') || query.includes('\\')
+
+  // 1. If query contains a path separator (e.g. "controllers/kantin" or "auth/login"):
+  // Search across the relative folder path
+  if (hasSlash) {
+    const normQuery = query.replace(/\\/g, '/')
+    const relPath = file.relativePath.toLowerCase().replace(/\\/g, '/')
+    const fullSearch = (file.rootName ? file.rootName.toLowerCase() + '/' : '') + relPath
+
+    if (fullSearch.includes(normQuery)) {
+      return 2500 - fullSearch.indexOf(normQuery) * 5
+    }
+    return scoreSubsequence(fullSearch, normQuery)
+  }
+
+  // 2. Default: Search strictly on FILE NAME (VS Code / Sublime standard)
+  const nameWithoutExt = fileName.replace(/\.[^/.]+$/, '')
+
+  // Exact file name match (with or without extension)
+  if (fileName === query || nameWithoutExt === query) {
+    return 3000
+  }
+
+  // File name starts with query
+  if (fileName.startsWith(query) || nameWithoutExt.startsWith(query)) {
+    return 2500 - (fileName.length - query.length) * 2
+  }
+
+  // Query is a direct substring of file name
+  const subIdx = fileName.indexOf(query)
+  if (subIdx !== -1) {
+    return 2000 - subIdx * 10 - (fileName.length - query.length) * 2
+  }
+
+  // Acronym / word boundaries in filename (e.g. "kc" -> "KantinController")
+  const acronymScore = scoreAcronym(fileName, query)
+  if (acronymScore > 0) {
+    return 1500 + acronymScore
+  }
+
+  // Subsequence match in filename only (e.g. "ktn" -> "kantin.php")
+  const subseqScore = scoreSubsequence(fileName, query)
+  if (subseqScore > 0) {
+    return 1000 + subseqScore
+  }
+
+  return 0
+}
+
+// Logika cerdas fuzzy search & recent files (Seluruh hasil yang cocok)
+const allMatchedFiles = computed<IndexedFile[]>(() => {
   if (searchMode.value !== 'files') return []
   const query = cleanFileQuery.value
 
@@ -560,12 +616,12 @@ const filteredFiles = computed<IndexedFile[]>(() => {
       }
     }
 
-    // 3. Jika belum ada recent/tab, tampilkan beberapa berkas pertama dari workspace
+    // 3. Jika belum ada recent/tab, tampilkan semua berkas dari workspace
     if (resultList.length === 0) {
-      return allProjectFiles.value.slice(0, 40)
+      return allProjectFiles.value
     }
 
-    return resultList.slice(0, 40)
+    return resultList
   }
 
   // Jika ada query: Filter dengan algoritma fuzzy scoring bertingkat
@@ -584,18 +640,30 @@ const filteredFiles = computed<IndexedFile[]>(() => {
     return a.file.name.localeCompare(b.file.name)
   })
 
-  return matches.slice(0, 60).map((m) => m.file)
+  return matches.map((m) => m.file)
 })
 
-// Unified items count for navigation
+// Total files match count
+const totalMatchedCount = computed(() => allMatchedFiles.value.length)
+
+// Total pages based on PAGE_SIZE
+const totalPages = computed(() => Math.max(1, Math.ceil(totalMatchedCount.value / PAGE_SIZE)))
+
+// Paged files for active page (100 items per view)
+const pagedFilteredFiles = computed<IndexedFile[]>(() => {
+  const start = (currentPage.value - 1) * PAGE_SIZE
+  return allMatchedFiles.value.slice(start, start + PAGE_SIZE)
+})
+
+// Unified items count for current active view navigation
 const currentItemsCount = computed(() => {
   if (searchMode.value === 'commands') return filteredCommands.value.length
   if (searchMode.value === 'symbols') return activeSymbols.value.length
   if (searchMode.value === 'goto-line') return targetLineNumber.value ? 1 : 0
-  return filteredFiles.value.length
+  return pagedFilteredFiles.value.length
 })
 
-watch([filteredFiles, filteredCommands, activeSymbols, searchMode], () => {
+watch([allMatchedFiles, filteredCommands, activeSymbols, searchMode], () => {
   selectedIndex.value = 0
 })
 
@@ -609,6 +677,7 @@ watch(
       }
       searchKeyword.value = ''
       debouncedKeyword.value = ''
+      currentPage.value = 1
       selectedIndex.value = 0
       await refreshWorkspaceFiles()
       nextTick(() => {
@@ -617,6 +686,22 @@ watch(
     }
   }
 )
+
+function prevPage(): void {
+  if (currentPage.value > 1) {
+    currentPage.value--
+    selectedIndex.value = 0
+    if (listContainerRef.value) listContainerRef.value.scrollTop = 0
+  }
+}
+
+function nextPage(): void {
+  if (currentPage.value < totalPages.value) {
+    currentPage.value++
+    selectedIndex.value = 0
+    if (listContainerRef.value) listContainerRef.value.scrollTop = 0
+  }
+}
 
 function executeSelection(): void {
   flushDebounce()
@@ -658,25 +743,33 @@ function executeSelection(): void {
     return
   }
 
-  // Files mode
-  const items = filteredFiles.value
-  if (items.length > 0 && selectedIndex.value >= 0 && selectedIndex.value < items.length) {
-    const selected = items[selectedIndex.value]
+  // File open mode
+  const files = pagedFilteredFiles.value
+  if (files.length > 0 && selectedIndex.value >= 0 && selectedIndex.value < files.length) {
+    const chosen = files[selectedIndex.value]
     workspaceStore.closeQuickOpen()
-    workspaceStore.openFile(selected.path, selected.name, targetLineNumber.value)
+    const targetLine = targetLineNumber.value
+    workspaceStore.openFile(chosen.path, chosen.name, targetLine)
   }
-}
-
-function handleFileClick(file: IndexedFile): void {
-  workspaceStore.closeQuickOpen()
-  workspaceStore.openFile(file.path, file.name, targetLineNumber.value)
 }
 
 function handlePaletteKeydown(event: KeyboardEvent): void {
   const isModifier = event.ctrlKey || event.metaKey
   const key = event.key.toLowerCase()
 
-  // Antigravity Quick Open cycling: Ctrl+E / Ctrl+P moves selection to next item
+  if (event.altKey && event.key === 'ArrowLeft') {
+    event.preventDefault()
+    prevPage()
+    return
+  }
+
+  if (event.altKey && event.key === 'ArrowRight') {
+    event.preventDefault()
+    nextPage()
+    return
+  }
+
+  // Ctrl+E or Ctrl+P cycle down
   if (isModifier && (key === 'e' || key === 'p')) {
     event.preventDefault()
     event.stopPropagation()
@@ -704,14 +797,18 @@ function handlePaletteKeydown(event: KeyboardEvent): void {
     }
   } else if (event.key === 'PageDown') {
     event.preventDefault()
-    if (count > 0) {
-      selectedIndex.value = Math.min(count - 1, selectedIndex.value + 6)
+    if (searchMode.value === 'files' && currentPage.value < totalPages.value) {
+      nextPage()
+    } else if (count > 0) {
+      selectedIndex.value = Math.min(count - 1, selectedIndex.value + 8)
       scrollToSelected()
     }
   } else if (event.key === 'PageUp') {
     event.preventDefault()
-    if (count > 0) {
-      selectedIndex.value = Math.max(0, selectedIndex.value - 6)
+    if (searchMode.value === 'files' && currentPage.value > 1) {
+      prevPage()
+    } else if (count > 0) {
+      selectedIndex.value = Math.max(0, selectedIndex.value - 8)
       scrollToSelected()
     }
   } else if (event.key === 'Enter') {
@@ -758,10 +855,14 @@ function getHighlightedSegments(text: string, query: string): Array<{ text: stri
   for (let i = 0; i < text.length; i++) {
     const char = text[i]
     if (qIdx < q.length && char.toLowerCase() === q[qIdx]) {
-      qIdx++
       segments.push({ text: char, match: true })
+      qIdx++
     } else {
-      segments.push({ text: char, match: false })
+      if (segments.length > 0 && !segments[segments.length - 1].match) {
+        segments[segments.length - 1].text += char
+      } else {
+        segments.push({ text: char, match: false })
+      }
     }
   }
 
@@ -770,358 +871,403 @@ function getHighlightedSegments(text: string, query: string): Array<{ text: stri
 </script>
 
 <template>
-  <Dialog
-    v-model:visible="workspaceStore.isQuickOpenVisible"
-    modal
-    :closable="false"
-    :dismissableMask="true"
-    :style="{ width: '640px', maxWidth: '94vw', marginTop: '4vh' }"
-    :position="'top'"
-    :pt="{
-      root: {
-        class: 'relative bg-[#0b101b]/95 backdrop-blur-2xl border border-white/[0.12] text-slate-100 rounded-2xl shadow-[0_25px_60px_-15px_rgba(0,0,0,0.9)] p-0 overflow-hidden ring-1 ring-white/[0.08] transition-all duration-200'
-      },
-      mask: {
-        class: 'bg-black/65 backdrop-blur-xs transition-all duration-200'
-      },
-      header: { class: 'hidden' },
-      content: { class: 'p-0 bg-transparent' }
-    }"
-  >
-    <!-- Top Glow Accent Line (Emerald Vue/Antigravity Green) -->
-    <div class="h-[2px] w-full bg-gradient-to-r from-transparent via-[#42b883] to-transparent shadow-[0_0_12px_#42b883]"></div>
-
-    <!-- Search Input Box -->
-    <div class="px-4 py-3.5 border-b border-white/[0.08] flex items-center gap-3 bg-white/[0.02]">
-      <!-- Dynamic Prefix Icon -->
-      <div class="flex items-center justify-center flex-shrink-0">
-        <UIcon
-          v-if="searchMode === 'commands'"
-          name="i-lucide-terminal"
-          class="size-5 text-indigo-400 animate-pulse"
-        />
-        <UIcon
-          v-else-if="searchMode === 'goto-line'"
-          name="i-lucide-arrow-down-to-line"
-          class="size-5 text-amber-400 animate-pulse"
-        />
-        <UIcon
-          v-else-if="searchMode === 'symbols'"
-          name="i-lucide-at-sign"
-          class="size-5 text-cyan-400 animate-pulse"
-        />
-        <UIcon
-          v-else
-          name="i-lucide-search"
-          class="size-5 text-[#42b883] animate-pulse"
-        />
-      </div>
-
-      <input
-        ref="searchInputRef"
-        v-model="searchKeyword"
-        type="text"
-        :placeholder="
-          searchMode === 'commands'
-            ? 'Ketik perintah untuk dieksekusi...'
-            : searchMode === 'goto-line'
-            ? 'Ketik nomor baris (contoh: :45)...'
-            : searchMode === 'symbols'
-            ? 'Ketik nama fungsi / simbol dalam berkas aktif...'
-            : 'Cari berkas project... (ketik > untuk perintah, :baris, @simbol)'
-        "
-        class="flex-1 bg-transparent text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none font-sans tracking-wide"
-        @keydown="handlePaletteKeydown"
-      />
-
-      <!-- Clear keyword button -->
-      <button
-        v-if="searchKeyword"
-        @click="searchKeyword = ''"
-        class="text-slate-400 hover:text-white p-1 rounded-md transition-colors cursor-pointer"
-        title="Bersihkan input"
+  <Teleport to="body">
+    <Transition
+      enter-active-class="transition duration-150 ease-out"
+      enter-from-class="opacity-0 scale-98"
+      enter-to-class="opacity-100 scale-100"
+      leave-active-class="transition duration-100 ease-in"
+      leave-from-class="opacity-100 scale-100"
+      leave-to-class="opacity-0 scale-98"
+    >
+      <div
+        v-if="workspaceStore.isQuickOpenVisible"
+        class="fixed inset-0 z-50 flex items-start justify-center pt-16 bg-black/65 backdrop-blur-xs px-4"
+        @click.self="workspaceStore.closeQuickOpen"
       >
-        <UIcon name="i-lucide-x" class="size-3.5" />
-      </button>
-
-      <!-- Badge shortcut info -->
-      <div class="flex items-center gap-1.5 flex-shrink-0 select-none">
-        <span
-          v-if="searchMode === 'files'"
-          class="text-[10px] text-[#42b883] bg-[#42b883]/15 border border-[#42b883]/30 px-2 py-0.5 rounded-md font-mono font-medium"
-        >
-          Ctrl+E
-        </span>
-        <span
-          v-else-if="searchMode === 'commands'"
-          class="text-[10px] text-indigo-400 bg-indigo-500/15 border border-indigo-500/30 px-2 py-0.5 rounded-md font-mono font-medium"
-        >
-          Perintah (>)
-        </span>
-        <span
-          v-else-if="searchMode === 'goto-line'"
-          class="text-[10px] text-amber-400 bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 rounded-md font-mono font-medium"
-        >
-          Baris (:)
-        </span>
-        <span class="text-[10px] text-slate-500 font-mono">
-          ESC
-        </span>
-      </div>
-    </div>
-
-    <!-- Context Header Sub-bar -->
-    <div class="px-4 py-1.5 bg-white/[0.01] border-b border-white/[0.04] flex items-center justify-between text-[11px] text-slate-400 select-none">
-      <div class="flex items-center gap-1.5 font-medium">
-        <template v-if="searchMode === 'commands'">
-          <UIcon name="i-lucide-command" class="size-3.5 text-indigo-400" />
-          <span>Daftar Perintah & Aksi</span>
-        </template>
-        <template v-else-if="searchMode === 'goto-line'">
-          <UIcon name="i-lucide-list-ordered" class="size-3.5 text-amber-400" />
-          <span>Lompat ke Baris di Berkas Aktif</span>
-        </template>
-        <template v-else-if="searchMode === 'symbols'">
-          <UIcon name="i-lucide-braces" class="size-3.5 text-cyan-400" />
-          <span>Simbol & Fungsi ({{ workspaceStore.activeTab.title }})</span>
-        </template>
-        <template v-else>
-          <UIcon :name="cleanFileQuery ? 'i-lucide-list-filter' : 'i-lucide-history'" class="size-3.5 text-[#42b883]" />
-          <span>{{ cleanFileQuery ? 'Hasil Pencarian Berkas' : 'Berkas Terbuka & Riwayat Terakhir' }}</span>
-        </template>
-      </div>
-
-      <div class="flex items-center gap-2">
-        <span v-if="isLoadingFiles" class="flex items-center gap-1 text-[#42b883]">
-          <UIcon name="i-lucide-loader-2" class="size-3 animate-spin" />
-          <span>Mengindeks berkas...</span>
-        </span>
-        <span v-else class="text-[10px] text-slate-500 font-mono">
-          <template v-if="searchMode === 'commands'">{{ filteredCommands.length }} perintah</template>
-          <template v-else-if="searchMode === 'symbols'">{{ activeSymbols.length }} simbol</template>
-          <template v-else>{{ filteredFiles.length }} dari {{ allProjectFiles.length }} berkas</template>
-        </span>
-      </div>
-    </div>
-
-    <!-- Results List Container -->
-    <div class="max-h-[380px] overflow-y-auto p-2 space-y-0.5 custom-scroll">
-      <!-- 1. MODE: COMMANDS (>) -->
-      <template v-if="searchMode === 'commands'">
+        <!-- Single Card Container without double-borders/outer padding -->
         <div
-          v-for="(cmd, idx) in filteredCommands"
-          :id="`quick-item-${idx}`"
-          :key="cmd.id"
-          @click="cmd.action"
-          @mouseenter="selectedIndex = idx"
-          class="group flex items-center justify-between px-3 py-2 rounded-xl text-xs transition-all duration-150 cursor-pointer select-none border"
-          :class="selectedIndex === idx
-            ? 'bg-gradient-to-r from-indigo-500/20 via-indigo-500/10 to-transparent border-indigo-500/40 text-white shadow-sm pl-2.5 translate-x-0.5'
-            : 'border-transparent text-slate-300 hover:bg-white/[0.04]'"
+          class="w-full max-w-2xl rounded-2xl bg-[#090e17]/95 backdrop-blur-2xl border border-white/[0.12] shadow-[0_25px_60px_-15px_rgba(0,0,0,0.9)] overflow-hidden flex flex-col max-h-[82vh] ring-1 ring-white/[0.08]"
         >
-          <div class="flex items-center gap-2.5 min-w-0 flex-1 pr-2">
-            <div class="w-6.5 h-6.5 rounded-lg bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400 flex-shrink-0">
-              <UIcon :name="cmd.icon" class="size-3.5" />
+          <!-- Top Glow Accent Line (Emerald Vue/Antigravity Green) -->
+          <div class="h-[2px] w-full bg-gradient-to-r from-transparent via-[#42b883] to-transparent shadow-[0_0_12px_#42b883]"></div>
+
+          <!-- Search Input Box Header -->
+          <div class="p-3 border-b border-white/[0.08] bg-[#0c121d]/90 flex items-center gap-2.5">
+            <!-- Dynamic Prefix Icon -->
+            <div class="size-7 rounded-xl bg-[#42b883]/10 border border-[#42b883]/20 flex items-center justify-center flex-shrink-0">
+              <UIcon
+                v-if="searchMode === 'commands'"
+                name="i-lucide-terminal"
+                class="size-4 text-indigo-400"
+              />
+              <UIcon
+                v-else-if="searchMode === 'goto-line'"
+                name="i-lucide-arrow-down-to-line"
+                class="size-4 text-amber-400"
+              />
+              <UIcon
+                v-else-if="searchMode === 'symbols'"
+                name="i-lucide-at-sign"
+                class="size-4 text-cyan-400"
+              />
+              <UIcon
+                v-else
+                name="i-lucide-search"
+                class="size-4 text-[#42b883]"
+              />
             </div>
-            <div class="flex items-center gap-2 truncate">
-              <span class="font-medium text-slate-200 group-hover:text-white truncate">
-                {{ cmd.title }}
-              </span>
-              <span class="text-[10px] text-slate-500 bg-white/[0.04] px-1.5 py-0.2 rounded border border-white/[0.06] font-sans">
-                {{ cmd.category }}
-              </span>
+
+            <!-- Main Input -->
+            <div class="flex-1 relative flex items-center">
+              <input
+                ref="searchInputRef"
+                v-model="searchKeyword"
+                type="text"
+                :placeholder="
+                  searchMode === 'commands'
+                    ? 'Ketik perintah untuk dieksekusi...'
+                    : searchMode === 'goto-line'
+                    ? 'Ketik nomor baris (contoh: :45)...'
+                    : searchMode === 'symbols'
+                    ? 'Ketik nama fungsi / simbol dalam berkas aktif...'
+                    : 'Cari berkas project... (ketik > untuk perintah, :baris, @simbol)'
+                "
+                class="w-full bg-white/[0.04] text-white text-xs font-mono placeholder:text-slate-500 pl-3 pr-8 py-2 rounded-xl border border-white/[0.08] focus:border-[#42b883]/50 focus:bg-white/[0.06] focus:outline-none transition-all shadow-inner"
+                @keydown="handlePaletteKeydown"
+              />
+              <button
+                v-if="searchKeyword"
+                @click="searchKeyword = ''"
+                class="absolute right-2 text-slate-500 hover:text-white transition-colors cursor-pointer p-0.5 rounded-full hover:bg-white/10"
+                title="Bersihkan input"
+              >
+                <UIcon name="i-lucide-x" class="size-3.5" />
+              </button>
             </div>
-          </div>
 
-          <span
-            v-if="cmd.shortcut"
-            class="text-[10px] font-mono text-slate-400 bg-white/[0.04] border border-white/[0.08] px-2 py-0.5 rounded-md"
-          >
-            {{ cmd.shortcut }}
-          </span>
-        </div>
-      </template>
-
-      <!-- 2. MODE: GOTO LINE (:) -->
-      <template v-else-if="searchMode === 'goto-line'">
-        <div
-          v-if="targetLineNumber"
-          :id="`quick-item-0`"
-          @click="executeSelection"
-          class="flex items-center gap-3 px-3 py-3 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-200 cursor-pointer select-none"
-        >
-          <UIcon name="i-lucide-arrow-right-circle" class="size-5 text-amber-400 flex-shrink-0 animate-pulse" />
-          <div>
-            <div class="font-semibold text-white text-xs">
-              Lompat ke Baris <span class="text-amber-300 font-mono font-bold">{{ targetLineNumber }}</span>
-            </div>
-            <div class="text-[11px] text-slate-400 font-sans">
-              Tekan Enter untuk membuka baris {{ targetLineNumber }} pada {{ workspaceStore.activeTab.title }}
-            </div>
-          </div>
-        </div>
-        <div v-else class="py-6 text-center text-slate-500 text-xs">
-          Ketik nomor baris yang ingin dituju (contoh: <code class="text-amber-400">:42</code>)
-        </div>
-      </template>
-
-      <!-- 3. MODE: SYMBOLS (@) -->
-      <template v-else-if="searchMode === 'symbols'">
-        <div
-          v-for="(sym, idx) in activeSymbols"
-          :id="`quick-item-${idx}`"
-          :key="`${sym.name}-${sym.line}`"
-          @click="executeSelection"
-          @mouseenter="selectedIndex = idx"
-          class="group flex items-center justify-between px-3 py-2 rounded-xl text-xs transition-all duration-150 cursor-pointer select-none border"
-          :class="selectedIndex === idx
-            ? 'bg-cyan-500/15 border-cyan-500/30 text-white pl-2.5'
-            : 'border-transparent text-slate-300 hover:bg-white/[0.04]'"
-        >
-          <div class="flex items-center gap-2.5 truncate">
-            <UIcon :name="sym.icon" class="size-4 text-cyan-400 flex-shrink-0" />
-            <span class="font-medium text-slate-200 group-hover:text-white truncate font-mono">
-              {{ sym.name }}
-            </span>
-            <span class="text-[10px] text-slate-500 bg-white/[0.04] px-1.5 py-0.2 rounded font-mono">
-              {{ sym.kind }}
-            </span>
-          </div>
-          <span class="text-[10px] text-slate-500 font-mono">Baris {{ sym.line }}</span>
-        </div>
-        <div v-if="activeSymbols.length === 0" class="py-6 text-center text-slate-500 text-xs">
-          Tidak ditemukan simbol fungsi dalam berkas ini.
-        </div>
-      </template>
-
-      <!-- 4. MODE: FILES (DEFAULT FUZZY SEARCH) -->
-      <template v-else>
-        <!-- Empty State: No workspace folder opened -->
-        <div
-          v-if="workspaceStore.workspaceRoots.length === 0"
-          class="py-8 px-4 text-center text-slate-400 space-y-2 select-none"
-        >
-          <UIcon name="i-lucide-folder-open" class="size-8 mx-auto text-slate-600 mb-1" />
-          <p class="text-xs font-medium text-slate-300">Belum ada folder project yang dibuka</p>
-          <p class="text-[11px] text-slate-500">Buka folder project terlebih dahulu untuk mencari berkas.</p>
-        </div>
-
-        <!-- Empty State: No search results found -->
-        <div
-          v-else-if="filteredFiles.length === 0"
-          class="py-8 px-4 text-center text-slate-400 space-y-1.5 select-none"
-        >
-          <UIcon name="i-lucide-file-x" class="size-8 mx-auto text-slate-600 mb-1" />
-          <p class="text-xs font-medium text-slate-300">Tidak ada berkas yang cocok</p>
-          <p class="text-[11px] text-slate-500">
-            Coba kata kunci lain atau periksa ejaan berkas yang Anda cari.
-          </p>
-        </div>
-
-        <!-- List Items (Antigravity Style: File Name highlighted + Dimmed Folder Breadcrumb) -->
-        <div
-          v-for="(file, index) in filteredFiles"
-          :id="`quick-item-${index}`"
-          :key="file.path"
-          @click="handleFileClick(file)"
-          @mouseenter="selectedIndex = index"
-          class="group flex items-center justify-between px-3 py-2 rounded-xl text-xs transition-all duration-150 cursor-pointer select-none"
-          :class="selectedIndex === index
-            ? 'bg-white/[0.08] text-white shadow-sm border-l-2 border-[#42b883] pl-2.5'
-            : 'text-slate-300 hover:bg-white/[0.04] border-l-2 border-transparent'"
-        >
-          <div class="flex items-center gap-2.5 min-w-0 flex-1 pr-3">
-            <!-- File Icon based on extension -->
-            <UIcon
-              :name="getNuxtFileIcon(file.name, false).icon"
-              class="size-4.5 flex-shrink-0"
-              :class="getNuxtFileIcon(file.name, false).colorClass"
-            />
-
-            <!-- File Name with Matched Character Highlight & Clean Folder Path -->
-            <div class="flex items-baseline gap-2 min-w-0 truncate">
-              <!-- Primary File Name -->
+            <!-- Mode Badges -->
+            <div class="flex items-center gap-1.5 flex-shrink-0 select-none">
               <span
-                class="font-medium truncate tracking-tight text-[12.5px]"
-                :class="selectedIndex === index ? 'text-white font-semibold' : 'text-slate-100'"
+                v-if="searchMode === 'files'"
+                class="text-[10px] text-[#42b883] bg-[#42b883]/15 border border-[#42b883]/30 px-2 py-1 rounded-xl font-mono font-medium"
               >
-                <template v-for="(seg, sIdx) in getHighlightedSegments(file.name, cleanFileQuery)" :key="sIdx">
-                  <span
-                    v-if="seg.match"
-                    class="text-[#42b883] font-bold underline decoration-[#42b883]/50"
-                  >{{ seg.text }}</span>
-                  <span v-else>{{ seg.text }}</span>
-                </template>
+                Ctrl+E
+              </span>
+              <span
+                v-else-if="searchMode === 'commands'"
+                class="text-[10px] text-indigo-400 bg-indigo-500/15 border border-indigo-500/30 px-2 py-1 rounded-xl font-mono font-medium"
+              >
+                Perintah (&gt;)
+              </span>
+              <span
+                v-else-if="searchMode === 'goto-line'"
+                class="text-[10px] text-amber-400 bg-amber-500/15 border border-amber-500/30 px-2 py-1 rounded-xl font-mono font-medium"
+              >
+                Baris (:)
+              </span>
+              <span
+                v-else-if="searchMode === 'symbols'"
+                class="text-[10px] text-cyan-400 bg-cyan-500/15 border border-cyan-500/30 px-2 py-1 rounded-xl font-mono font-medium"
+              >
+                Simbol (@)
               </span>
 
-              <!-- Project Root & Folder Path Dimmed Breadcrumb (Gambar 2 Style: Root • Subfolder) -->
-              <div
-                v-if="file.rootName || file.folderPath"
-                class="text-[11px] text-slate-400 truncate font-mono select-none flex items-center gap-1.5 flex-shrink min-w-0"
+              <!-- Close Modal Button -->
+              <button
+                @click="workspaceStore.closeQuickOpen"
+                class="size-8 rounded-xl flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/[0.08] transition-colors cursor-pointer border border-transparent"
+                title="Tutup (Esc)"
               >
-                <span v-if="file.rootName" class="text-slate-300 font-medium truncate">{{ file.rootName }}</span>
-                <span v-if="file.rootName && file.folderPath" class="text-slate-600 flex-shrink-0">•</span>
-                <span v-if="file.folderPath" class="text-slate-400 truncate">{{ file.folderPath }}</span>
-              </div>
+                <UIcon name="i-lucide-x" class="size-4" />
+              </button>
             </div>
           </div>
 
-          <!-- Badges on right: Aktif / Terbuka / Line indicator -->
-          <div class="flex items-center gap-1.5 flex-shrink-0">
-            <span
-              v-if="targetLineNumber"
-              class="text-[9px] px-1.5 py-0.5 rounded-md font-mono bg-amber-500/15 text-amber-300 border border-amber-500/30"
-            >
-              :{{ targetLineNumber }}
-            </span>
-            <span
-              v-if="workspaceStore.activeTab.filePath === file.path"
-              class="text-[9px] px-1.5 py-0.5 rounded-md font-mono font-medium bg-[#42b883]/15 text-[#42b883] border border-[#42b883]/30 flex items-center gap-1"
-            >
-              <span class="w-1.5 h-1.5 rounded-full bg-[#42b883] animate-pulse"></span>
-              <span>Aktif</span>
-            </span>
-            <span
-              v-else-if="workspaceStore.tabList.some((t) => t.filePath === file.path)"
-              class="text-[9px] px-1.5 py-0.5 rounded-md font-mono text-slate-400 bg-white/[0.04] border border-white/[0.08]"
-            >
-              Terbuka
-            </span>
-            <UIcon
-              name="i-lucide-arrow-right"
-              class="size-3 text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity"
-              :class="{ '!opacity-100 text-[#42b883]': selectedIndex === index }"
-            />
+          <!-- Context Stats & Pagination Bar -->
+          <div class="px-4 py-1.5 bg-[#0a0f19] border-b border-white/[0.06] flex items-center justify-between text-[11px] text-slate-400 select-none">
+            <!-- Left: Match and File counts with Range info -->
+            <div class="flex items-center gap-2 font-mono">
+              <span v-if="isLoadingFiles" class="flex items-center gap-1.5 text-[#42b883]">
+                <UIcon name="i-lucide-loader-2" class="size-3 animate-spin" />
+                <span>Mengindeks berkas workspace...</span>
+              </span>
+              <template v-else>
+                <span v-if="searchMode === 'commands'" class="text-slate-300">
+                  {{ filteredCommands.length }} perintah tersedia
+                </span>
+                <span v-else-if="searchMode === 'symbols'" class="text-slate-300">
+                  {{ activeSymbols.length }} simbol di berkas aktif
+                </span>
+                <span v-else-if="totalMatchedCount > 0" class="flex items-center gap-1.5">
+                  <span class="text-[#42b883] font-bold">
+                    {{ (currentPage - 1) * PAGE_SIZE + 1 }} - {{ Math.min(currentPage * PAGE_SIZE, totalMatchedCount) }}
+                  </span>
+                  <span>di</span>
+                  <span class="text-white font-bold">{{ totalMatchedCount }}</span>
+                  <span>berkas</span>
+                  <span v-if="totalPages > 1" class="text-slate-500 font-normal">(Hal. {{ currentPage }}/{{ totalPages }})</span>
+                </span>
+                <span v-else class="text-slate-500">
+                  Tidak ada berkas yang cocok
+                </span>
+              </template>
+            </div>
+
+            <!-- Right: Pagination Buttons when in files mode -->
+            <div v-if="searchMode === 'files' && totalMatchedCount > 0" class="flex items-center gap-2 font-mono">
+              <!-- Pagination: Sebelumnya (Prev) -->
+              <button
+                @click="prevPage"
+                :disabled="currentPage <= 1 || isLoadingFiles"
+                class="px-2 py-0.5 rounded-lg text-[11px] flex items-center gap-1 transition-all"
+                :class="
+                  currentPage > 1 && !isLoadingFiles
+                    ? 'bg-white/[0.05] hover:bg-[#42b883]/20 text-slate-200 hover:text-[#42b883] border border-white/[0.08] hover:border-[#42b883]/30 cursor-pointer shadow-xs active:scale-95'
+                    : 'bg-white/[0.01] text-slate-600 border border-white/[0.03] cursor-not-allowed opacity-50'
+                "
+                title="Halaman Sebelumnya (Alt+Left)"
+              >
+                <UIcon name="i-lucide-chevron-left" class="size-3" />
+                <span>Sebelumnya</span>
+              </button>
+
+              <!-- Pagination: Selanjutnya (Next 100) -->
+              <button
+                @click="nextPage"
+                :disabled="currentPage >= totalPages || isLoadingFiles"
+                class="px-2.5 py-0.5 rounded-lg text-[11px] flex items-center gap-1 transition-all font-medium"
+                :class="
+                  currentPage < totalPages && !isLoadingFiles
+                    ? 'bg-[#42b883]/15 hover:bg-[#42b883]/25 text-[#42b883] border border-[#42b883]/40 cursor-pointer shadow-xs active:scale-95'
+                    : 'bg-white/[0.01] text-slate-600 border border-white/[0.03] cursor-not-allowed opacity-50'
+                "
+                title="Cari 100 Berkas Berikutnya (Alt+Right)"
+              >
+                <span>Selanjutnya</span>
+                <UIcon name="i-lucide-chevron-right" class="size-3" />
+              </button>
+            </div>
+          </div>
+
+          <!-- Results List Container -->
+          <div
+            ref="listContainerRef"
+            class="flex-1 overflow-y-auto p-2 space-y-0.5 custom-scroll select-none min-h-[160px] max-h-[58vh]"
+          >
+            <!-- 1. MODE: COMMANDS (>) -->
+            <template v-if="searchMode === 'commands'">
+              <div
+                v-for="(cmd, idx) in filteredCommands"
+                :id="`quick-item-${idx}`"
+                :key="cmd.id"
+                @click="cmd.action"
+                @mouseenter="selectedIndex = idx"
+                class="group flex items-center justify-between px-3 py-2 rounded-xl text-xs transition-all duration-150 cursor-pointer select-none border"
+                :class="selectedIndex === idx
+                  ? 'bg-gradient-to-r from-indigo-500/20 via-indigo-500/10 to-transparent border-indigo-500/40 text-white shadow-sm pl-2.5 translate-x-0.5'
+                  : 'border-transparent text-slate-300 hover:bg-white/[0.04]'"
+              >
+                <div class="flex items-center gap-2.5 min-w-0 flex-1 pr-2">
+                  <div class="w-6.5 h-6.5 rounded-lg bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400 flex-shrink-0">
+                    <UIcon :name="cmd.icon" class="size-3.5" />
+                  </div>
+                  <div class="flex items-center gap-2 truncate">
+                    <span class="font-medium text-slate-200 group-hover:text-white truncate">
+                      {{ cmd.title }}
+                    </span>
+                    <span class="text-[10px] text-slate-500 bg-white/[0.04] px-1.5 py-0.2 rounded border border-white/[0.06] font-sans">
+                      {{ cmd.category }}
+                    </span>
+                  </div>
+                </div>
+
+                <span
+                  v-if="cmd.shortcut"
+                  class="text-[10px] font-mono text-slate-400 bg-white/[0.04] border border-white/[0.08] px-2 py-0.5 rounded-md"
+                >
+                  {{ cmd.shortcut }}
+                </span>
+              </div>
+            </template>
+
+            <!-- 2. MODE: GOTO LINE (:) -->
+            <template v-else-if="searchMode === 'goto-line'">
+              <div
+                v-if="targetLineNumber"
+                :id="`quick-item-0`"
+                @click="executeSelection"
+                class="flex items-center justify-between px-3 py-2.5 rounded-xl text-xs transition-all duration-150 cursor-pointer select-none border bg-amber-500/15 border-amber-500/40 text-white shadow-sm"
+              >
+                <div class="flex items-center gap-2.5">
+                  <div class="w-6.5 h-6.5 rounded-lg bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-300 flex-shrink-0">
+                    <UIcon name="i-lucide-arrow-down-to-line" class="size-3.5" />
+                  </div>
+                  <span class="font-medium text-amber-200">
+                    Lompat ke baris <strong>{{ targetLineNumber }}</strong> pada {{ workspaceStore.activeTab.title || 'berkas aktif' }}
+                  </span>
+                </div>
+                <UIcon name="i-lucide-corner-down-left" class="size-3.5 text-amber-300" />
+              </div>
+              <div v-else class="px-4 py-8 text-center text-xs text-slate-500">
+                Ketik nomor baris tujuan (misal: <code class="text-amber-400">:45</code>) lalu tekan Enter
+              </div>
+            </template>
+
+            <!-- 3. MODE: SYMBOLS (@) -->
+            <template v-else-if="searchMode === 'symbols'">
+              <div
+                v-for="(sym, idx) in activeSymbols"
+                :id="`quick-item-${idx}`"
+                :key="`${sym.name}-${sym.line}`"
+                @click="executeSelection"
+                @mouseenter="selectedIndex = idx"
+                class="group flex items-center justify-between px-3 py-2 rounded-xl text-xs transition-all duration-150 cursor-pointer select-none border"
+                :class="selectedIndex === idx
+                  ? 'bg-gradient-to-r from-cyan-500/20 via-cyan-500/10 to-transparent border-cyan-500/40 text-white shadow-sm pl-2.5 translate-x-0.5'
+                  : 'border-transparent text-slate-300 hover:bg-white/[0.04]'"
+              >
+                <div class="flex items-center gap-2.5 min-w-0 flex-1">
+                  <div class="w-6.5 h-6.5 rounded-lg bg-cyan-500/15 border border-cyan-500/30 flex items-center justify-center text-cyan-400 flex-shrink-0">
+                    <UIcon :name="sym.icon" class="size-3.5" />
+                  </div>
+                  <span class="font-mono text-xs font-semibold text-slate-200 group-hover:text-white truncate">
+                    {{ sym.name }}
+                  </span>
+                  <span class="text-[10px] text-cyan-400/80 uppercase font-mono px-1.5 py-0.2 rounded bg-cyan-500/10 border border-cyan-500/20">
+                    {{ sym.kind }}
+                  </span>
+                </div>
+                <span class="text-[10px] font-mono text-slate-400 bg-white/[0.04] px-1.5 py-0.5 rounded border border-white/[0.06]">
+                  L{{ sym.line }}
+                </span>
+              </div>
+            </template>
+
+            <!-- 4. MODE: FILES SEARCH (Default) -->
+            <template v-else>
+              <div
+                v-if="!isLoadingFiles && allMatchedFiles.length === 0"
+                class="py-12 flex flex-col items-center justify-center text-center space-y-2"
+              >
+                <UIcon name="i-lucide-file-question" class="size-8 text-slate-600" />
+                <div class="text-xs font-medium text-slate-400">Tidak ada berkas yang cocok dengan pencarian</div>
+              </div>
+
+              <div
+                v-for="(file, index) in pagedFilteredFiles"
+                :id="`quick-item-${index}`"
+                :key="file.path"
+                @click="executeSelection"
+                @mouseenter="selectedIndex = index"
+                class="group flex items-center justify-between px-3 py-1.5 rounded-xl text-xs transition-all duration-150 cursor-pointer select-none border"
+                :class="selectedIndex === index
+                  ? 'bg-gradient-to-r from-[#42b883]/20 via-[#42b883]/10 to-transparent border-[#42b883]/40 text-white shadow-sm pl-2.5 translate-x-0.5'
+                  : 'border-transparent text-slate-300 hover:bg-white/[0.04]'"
+              >
+                <div class="flex items-center gap-2.5 min-w-0 flex-1 pr-3">
+                  <!-- File Icon (Dynamic Nuxt Icon) -->
+                  <i :class="getNuxtFileIcon(file.name)" class="text-sm flex-shrink-0"></i>
+
+                  <!-- Highlighted File Name and Breadcrumb -->
+                  <div class="flex items-baseline gap-2 truncate min-w-0 flex-1">
+                    <span class="font-mono text-xs font-semibold text-slate-200 group-hover:text-white truncate flex-shrink-0">
+                      <template v-for="(seg, sIdx) in getHighlightedSegments(file.name, cleanFileQuery)" :key="sIdx">
+                        <span
+                          v-if="seg.match"
+                          class="text-[#42b883] font-bold underline decoration-[#42b883]/50"
+                        >{{ seg.text }}</span>
+                        <span v-else>{{ seg.text }}</span>
+                      </template>
+                    </span>
+
+                    <!-- Project Root & Folder Path Dimmed Breadcrumb -->
+                    <div
+                      v-if="file.rootName || file.folderPath"
+                      class="text-[11px] text-slate-400 truncate font-mono select-none flex items-center gap-1.5 flex-shrink min-w-0"
+                    >
+                      <span v-if="file.rootName" class="text-slate-300 font-medium truncate">{{ file.rootName }}</span>
+                      <span v-if="file.rootName && file.folderPath" class="text-slate-600 flex-shrink-0">•</span>
+                      <span v-if="file.folderPath" class="text-slate-500 truncate">{{ file.folderPath }}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Badges on right: Aktif / Terbuka / Line indicator -->
+                <div class="flex items-center gap-1.5 flex-shrink-0">
+                  <span
+                    v-if="targetLineNumber"
+                    class="text-[9px] px-1.5 py-0.5 rounded-md font-mono bg-amber-500/15 text-amber-300 border border-amber-500/30"
+                  >
+                    :{{ targetLineNumber }}
+                  </span>
+                  <span
+                    v-if="workspaceStore.activeTab.filePath === file.path"
+                    class="text-[9px] px-1.5 py-0.5 rounded-md font-mono font-medium bg-[#42b883]/15 text-[#42b883] border border-[#42b883]/30 flex items-center gap-1"
+                  >
+                    <span class="w-1.5 h-1.5 rounded-full bg-[#42b883] animate-pulse"></span>
+                    <span>Aktif</span>
+                  </span>
+                  <span
+                    v-else-if="workspaceStore.tabList.some((t) => t.filePath === file.path)"
+                    class="text-[9px] px-1.5 py-0.5 rounded-md font-mono text-slate-400 bg-white/[0.04] border border-white/[0.08]"
+                  >
+                    Terbuka
+                  </span>
+                  <UIcon
+                    name="i-lucide-arrow-right"
+                    class="size-3 text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                    :class="{ '!opacity-100 text-[#42b883]': selectedIndex === index }"
+                  />
+                </div>
+              </div>
+            </template>
+          </div>
+
+          <!-- Palette Footer & Shortcut Hints -->
+          <div class="px-4 py-2 bg-[#090d15] border-t border-white/[0.06] flex items-center justify-between text-[10.5px] text-slate-500 select-none">
+            <div class="flex items-center gap-3">
+              <span class="flex items-center gap-1">
+                <kbd class="px-1 py-0.2 rounded bg-white/[0.06] text-slate-300 font-mono text-[10px]">↑</kbd>
+                <kbd class="px-1 py-0.2 rounded bg-white/[0.06] text-slate-300 font-mono text-[10px]">↓</kbd>
+                <span>Navigasi</span>
+              </span>
+              <span class="flex items-center gap-1">
+                <kbd class="px-1.5 py-0.2 rounded bg-white/[0.06] text-slate-300 font-mono text-[10px]">↵</kbd>
+                <span>Buka</span>
+              </span>
+              <span class="flex items-center gap-1">
+                <kbd class="px-1.5 py-0.2 rounded bg-white/[0.06] text-slate-300 font-mono text-[10px]">Esc</kbd>
+                <span>Tutup</span>
+              </span>
+            </div>
+
+            <div class="flex items-center gap-2 text-[10px] text-slate-500 font-mono">
+              <span class="hover:text-slate-300 cursor-pointer" @click="searchKeyword = '>'">&gt; Perintah</span>
+              <span>•</span>
+              <span class="hover:text-slate-300 cursor-pointer" @click="searchKeyword = ':'">: Baris</span>
+              <span>•</span>
+              <span class="hover:text-slate-300 cursor-pointer" @click="searchKeyword = '@'">@ Simbol</span>
+            </div>
           </div>
         </div>
-      </template>
-    </div>
-
-    <!-- Palette Footer & Shortcut Hints -->
-    <div class="px-4 py-2 bg-white/[0.02] border-t border-white/[0.06] flex items-center justify-between text-[11px] text-slate-400 select-none">
-      <div class="flex items-center gap-3">
-        <span class="flex items-center gap-1">
-          <kbd class="px-1.5 py-0.5 text-[9px] rounded bg-white/[0.06] border border-white/[0.1] font-mono text-slate-300">↑</kbd>
-          <kbd class="px-1.5 py-0.5 text-[9px] rounded bg-white/[0.06] border border-white/[0.1] font-mono text-slate-300">↓</kbd>
-          <span class="text-slate-500 ml-0.5">Navigasi</span>
-        </span>
-        <span class="flex items-center gap-1">
-          <kbd class="px-1.5 py-0.5 text-[9px] rounded bg-white/[0.06] border border-white/[0.1] font-mono text-slate-300">↵</kbd>
-          <span class="text-slate-500 ml-0.5">Buka</span>
-        </span>
-        <span class="flex items-center gap-1">
-          <kbd class="px-1.5 py-0.5 text-[9px] rounded bg-white/[0.06] border border-white/[0.1] font-mono text-slate-300">esc</kbd>
-          <span class="text-slate-500 ml-0.5">Tutup</span>
-        </span>
       </div>
-
-      <div class="flex items-center gap-2 text-[10px] text-slate-500 font-mono">
-        <span class="hover:text-slate-300 cursor-pointer" @click="searchKeyword = '>'">&gt; Perintah</span>
-        <span>•</span>
-        <span class="hover:text-slate-300 cursor-pointer" @click="searchKeyword = ':'">: Baris</span>
-        <span>•</span>
-        <span class="hover:text-slate-300 cursor-pointer" @click="searchKeyword = '@'">@ Simbol</span>
-      </div>
-    </div>
-  </Dialog>
+    </Transition>
+  </Teleport>
 </template>
+
+<style scoped>
+.custom-scroll::-webkit-scrollbar {
+  width: 5px;
+}
+.custom-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+.custom-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(66, 184, 131, 0.4);
+}
+</style>

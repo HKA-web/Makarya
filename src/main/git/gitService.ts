@@ -427,15 +427,37 @@ feat(payroll): improve ai commit message generator dan normalisasi path
             model: chosenModel,
             messages: [{ role: 'user', content: prompt }],
             temperature: 0.3,
-            max_tokens: 220
+            max_tokens: 220,
+            stream: false
           })
         })
 
         clearTimeout(timeoutId)
 
         if (response.ok) {
-          const data = await response.json()
-          const rawMsg = data.choices?.[0]?.message?.content || ''
+          const rawText = await response.text()
+          let rawMsg = ''
+
+          try {
+            const data = JSON.parse(rawText)
+            rawMsg = data.choices?.[0]?.message?.content || data.choices?.[0]?.text || ''
+          } catch {
+            // Handle cases where endpoint/proxy returned SSE chunks (data: {...})
+            const sseLines = rawText.split('\n')
+            for (const line of sseLines) {
+              const trimmed = line.trim()
+              if (trimmed.startsWith('data: ') && trimmed !== 'data: [DONE]') {
+                try {
+                  const chunk = JSON.parse(trimmed.slice(6))
+                  const delta = chunk.choices?.[0]?.delta?.content || chunk.choices?.[0]?.message?.content || ''
+                  rawMsg += delta
+                } catch {
+                  // ignore unparseable chunk
+                }
+              }
+            }
+          }
+
           const cleanMsg = rawMsg
             .trim()
             .replace(/^```(?:markdown|git)?\n?|```$/gi, '')

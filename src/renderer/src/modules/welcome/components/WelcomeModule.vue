@@ -24,7 +24,7 @@ const emit = defineEmits<{
           <span>Siap Digunakan</span>
         </div>
         <h2 class="text-2xl font-black text-white tracking-tight">
-          Selamat Datang di Makarya App
+          Selamat Datang di Makarya IDE
         </h2>
         <p class="text-xs text-slate-400 max-w-md mx-auto leading-relaxed">
           Aplikasi sudah siap digunakan. Mulai eksplorasi dan tambahkan berbagai fitur baru sesuai dengan kebutuhan Anda.

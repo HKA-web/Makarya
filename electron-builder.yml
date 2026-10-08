@@ -1,5 +1,5 @@
-appId: com.makarya.workspace
-productName: Makarya Code Editor
+appId: com.makarya.ide
+productName: Makarya IDE
 directories:
   output: dist
   buildResources: build
@@ -31,7 +31,7 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: Makarya Code Editor
+  shortcutName: Makarya IDE
   installerIcon: build/icon.ico
   uninstallerIcon: build/icon.ico
   installerHeaderIcon: build/icon.ico

@@ -112,12 +112,6 @@ const isManagerOpen = ref(false)
                 <div class="flex items-center gap-2">
                   <span class="text-xs font-semibold text-white">{{ mod.manifest.name }}</span>
                   <span
-                    v-if="mod.manifest.version"
-                    class="text-[9px] px-1.5 py-0.2 rounded bg-indigo-500/15 text-indigo-300 font-mono border border-indigo-500/20"
-                  >
-                    v{{ mod.manifest.version }}
-                  </span>
-                  <span
                     v-if="mod.manifest.badge"
                     class="text-[9px] px-1.5 py-0.2 rounded bg-white/[0.06] text-slate-300 font-mono"
                   >

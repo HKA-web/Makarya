@@ -1,39 +1,129 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { useWorkspaceStore } from '@renderer/stores/workspaceStore'
 
+export interface TerminalTab {
+  id: string
+  title: string
+  shell: 'powershell' | 'cmd' | 'bash'
+  cwd?: string
+  terminalInstance?: Terminal
+  fitAddon?: FitAddon
+  isReady?: boolean
+  isExited?: boolean
+  exitCode?: number
+}
+
 const workspaceStore = useWorkspaceStore()
 
-const terminalContainerRef = ref<HTMLDivElement | null>(null)
-let terminalInstance: Terminal | null = null
-let fitAddon: FitAddon | null = null
+const terminals = ref<TerminalTab[]>([])
+const activeTerminalId = ref<string>('')
+const terminalContainers = ref<Record<string, HTMLDivElement | null>>({})
+
+const isResizing = ref(false)
+
 let removeDataListener: (() => void) | null = null
 let removeExitListener: (() => void) | null = null
 
-const terminalId = ref<string>(`term-${Date.now()}`)
-const selectedShell = ref<'powershell' | 'cmd'>('powershell')
-const isResizing = ref(false)
-const isTerminalReady = ref(false)
+const activeTerminal = computed(() => {
+  return terminals.value.find((t) => t.id === activeTerminalId.value) || terminals.value[0] || null
+})
 
-// Initialize or reconnect Terminal
-async function initTerminal(): Promise<void> {
-  if (!terminalContainerRef.value || !window.makaryaAPI) return
+function getShellBadgeName(shell: 'powershell' | 'cmd' | 'bash'): string {
+  if (shell === 'powershell') return 'PowerShell'
+  if (shell === 'cmd') return 'CMD'
+  return 'Git Bash'
+}
 
-  // Dispose previous instance if any
-  if (terminalInstance) {
-    try {
-      terminalInstance.dispose()
-    } catch {}
-    terminalInstance = null
+// Create a new terminal tab
+async function createTerminalTab(shell: 'powershell' | 'cmd' | 'bash' = 'powershell'): Promise<void> {
+  const newId = `term-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+  const shellLabel = getShellBadgeName(shell)
+  const tabNumber = terminals.value.length + 1
+
+  const newTab: TerminalTab = {
+    id: newId,
+    title: `${tabNumber}: ${shellLabel}`,
+    shell,
+    cwd: workspaceStore.getEffectiveProjectRoot() || workspaceStore.activeRootPath || undefined,
+    isReady: false,
+    isExited: false
   }
 
-  terminalId.value = `term-${Date.now()}`
+  terminals.value.push(newTab)
+  activeTerminalId.value = newId
 
-  // Create xterm.js instance with Makarya theme
-  terminalInstance = new Terminal({
+  await nextTick()
+  await mountTerminalInstance(newTab)
+}
+
+// Select active terminal tab
+function selectTerminalTab(id: string): void {
+  if (activeTerminalId.value === id) return
+  activeTerminalId.value = id
+  nextTick(() => {
+    const active = activeTerminal.value
+    if (active?.fitAddon && active?.terminalInstance) {
+      try {
+        active.fitAddon.fit()
+        window.makaryaAPI?.resizeTerminal({
+          id: active.id,
+          cols: active.terminalInstance.cols,
+          rows: active.terminalInstance.rows
+        })
+      } catch {}
+      active.terminalInstance.focus()
+    }
+  })
+}
+
+// Close and destroy a terminal tab
+async function closeTerminalTab(id: string, e?: MouseEvent): Promise<void> {
+  if (e) e.stopPropagation()
+
+  const index = terminals.value.findIndex((t) => t.id === id)
+  if (index === -1) return
+
+  const target = terminals.value[index]
+  if (window.makaryaAPI) {
+    await window.makaryaAPI.killTerminal({ id: target.id })
+  }
+
+  if (target.terminalInstance) {
+    try {
+      target.terminalInstance.dispose()
+    } catch {}
+  }
+
+  delete terminalContainers.value[target.id]
+  terminals.value.splice(index, 1)
+
+  if (terminals.value.length === 0) {
+    // If closed all tabs, create a fresh default one
+    await createTerminalTab('powershell')
+  } else if (activeTerminalId.value === id) {
+    const nextIdx = Math.max(0, index - 1)
+    selectTerminalTab(terminals.value[nextIdx].id)
+  }
+}
+
+// Mount xterm instance to its container
+async function mountTerminalInstance(tab: TerminalTab): Promise<void> {
+  const container = terminalContainers.value[tab.id]
+  if (!container || !window.makaryaAPI) return
+
+  if (tab.terminalInstance) {
+    try {
+      tab.terminalInstance.dispose()
+    } catch {}
+    tab.terminalInstance = undefined
+    tab.fitAddon = undefined
+  }
+
+  const termInstance = new Terminal({
     cursorBlink: true,
     cursorStyle: 'bar',
     fontSize: 13,
@@ -42,12 +132,12 @@ async function initTerminal(): Promise<void> {
     theme: {
       background: '#090d14',
       foreground: '#e2e8f0',
-      cursor: '#10b981',
+      cursor: '#42b883',
       cursorAccent: '#090d14',
-      selectionBackground: 'rgba(16, 185, 129, 0.35)',
+      selectionBackground: 'rgba(66, 184, 131, 0.35)',
       black: '#1e293b',
       red: '#ef4444',
-      green: '#10b981',
+      green: '#42b883',
       yellow: '#f59e0b',
       blue: '#3b82f6',
       magenta: '#a855f7',
@@ -55,7 +145,7 @@ async function initTerminal(): Promise<void> {
       white: '#f8fafc',
       brightBlack: '#475569',
       brightRed: '#f87171',
-      brightGreen: '#34d399',
+      brightGreen: '#42b883',
       brightYellow: '#fbbf24',
       brightBlue: '#60a5fa',
       brightMagenta: '#c084fc',
@@ -66,73 +156,91 @@ async function initTerminal(): Promise<void> {
     scrollback: 5000
   })
 
-  fitAddon = new FitAddon()
-  terminalInstance.loadAddon(fitAddon)
+  const fit = new FitAddon()
+  termInstance.loadAddon(fit)
 
-  // Clear container and open terminal
-  terminalContainerRef.value.innerHTML = ''
-  terminalInstance.open(terminalContainerRef.value)
+  container.innerHTML = ''
+  termInstance.open(container)
 
-  // Fit initially
   try {
-    fitAddon.fit()
+    fit.fit()
   } catch {}
 
-  const cwd = workspaceStore.getEffectiveProjectRoot() || workspaceStore.activeRootPath || undefined
-  const cols = terminalInstance.cols || 80
-  const rows = terminalInstance.rows || 24
+  tab.terminalInstance = termInstance
+  tab.fitAddon = fit
 
-  // Register PTY backend in main process
+  const cwd = tab.cwd || workspaceStore.getEffectiveProjectRoot() || workspaceStore.activeRootPath || undefined
+  const cols = termInstance.cols || 80
+  const rows = termInstance.rows || 24
+
   const res = await window.makaryaAPI.createTerminal({
-    id: terminalId.value,
+    id: tab.id,
     cols,
     rows,
     cwd,
-    shell: selectedShell.value
+    shell: tab.shell
   })
 
   if (!res.success) {
-    terminalInstance.writeln(`\x1b[31m[Error] Gagal memulai terminal: ${res.error}\x1b[0m`)
+    termInstance.writeln(`\x1b[31m[Error] Gagal memulai terminal: ${res.error}\x1b[0m`)
     return
   }
 
-  // Handle user input from xterm to PTY
-  terminalInstance.onData((data) => {
+  termInstance.onData((data) => {
     window.makaryaAPI?.writeTerminal({
-      id: terminalId.value,
+      id: tab.id,
       data
     })
   })
 
-  // Handle resize from xterm fit
-  terminalInstance.onResize(({ cols, rows }) => {
+  termInstance.onResize(({ cols, rows }) => {
     window.makaryaAPI?.resizeTerminal({
-      id: terminalId.value,
+      id: tab.id,
       cols,
       rows
     })
   })
 
-  isTerminalReady.value = true
+  tab.isReady = true
+  if (tab.id === activeTerminalId.value) {
+    termInstance.focus()
+  }
 }
 
 // Clear terminal output
 function handleClearTerminal(): void {
-  terminalInstance?.clear()
+  activeTerminal.value?.terminalInstance?.clear()
 }
 
-// Restart terminal session
+// Restart current active terminal session
 async function handleRestartTerminal(): Promise<void> {
-  if (window.makaryaAPI && terminalId.value) {
-    await window.makaryaAPI.killTerminal({ id: terminalId.value })
+  const active = activeTerminal.value
+  if (!active) return
+
+  if (window.makaryaAPI) {
+    await window.makaryaAPI.killTerminal({ id: active.id })
   }
-  await initTerminal()
+
+  if (active.terminalInstance) {
+    try {
+      active.terminalInstance.dispose()
+    } catch {}
+    active.terminalInstance = undefined
+    active.fitAddon = undefined
+    active.isReady = false
+    active.isExited = false
+  }
+
+  await nextTick()
+  await mountTerminalInstance(active)
 }
 
-// Switch shell type
-async function handleSwitchShell(shell: 'powershell' | 'cmd'): Promise<void> {
-  if (selectedShell.value === shell) return
-  selectedShell.value = shell
+// Switch shell type for active terminal tab
+async function handleSwitchActiveShell(shell: 'powershell' | 'cmd' | 'bash'): Promise<void> {
+  const active = activeTerminal.value
+  if (!active || active.shell === shell) return
+  active.shell = shell
+  active.title = `${terminals.value.indexOf(active) + 1}: ${getShellBadgeName(shell)}`
   await handleRestartTerminal()
 }
 
@@ -141,15 +249,16 @@ function handleClosePanel(): void {
   workspaceStore.setBottomPanelOpen(false)
 }
 
-// Fit terminal wrapper
+// Fit all active terminals
 function fitTerminal(): void {
-  if (fitAddon && terminalInstance && workspaceStore.isBottomPanelOpen) {
+  const active = activeTerminal.value
+  if (active?.fitAddon && active?.terminalInstance && workspaceStore.isBottomPanelOpen) {
     try {
-      fitAddon.fit()
+      active.fitAddon.fit()
       window.makaryaAPI?.resizeTerminal({
-        id: terminalId.value,
-        cols: terminalInstance.cols,
-        rows: terminalInstance.rows
+        id: active.id,
+        cols: active.terminalInstance.cols,
+        rows: active.terminalInstance.rows
       })
     } catch {}
   }
@@ -187,14 +296,18 @@ function handleMouseUpResize(): void {
 onMounted(() => {
   if (window.makaryaAPI) {
     removeDataListener = window.makaryaAPI.onTerminalData((payload) => {
-      if (payload.id === terminalId.value && terminalInstance) {
-        terminalInstance.write(payload.data)
+      const target = terminals.value.find((t) => t.id === payload.id)
+      if (target?.terminalInstance) {
+        target.terminalInstance.write(payload.data)
       }
     })
 
     removeExitListener = window.makaryaAPI.onTerminalExit((payload) => {
-      if (payload.id === terminalId.value && terminalInstance) {
-        terminalInstance.writeln(`\r\n\x1b[33m[Proses terminal telah selesai (Exit code: ${payload.exitCode})]\x1b[0m\r\n`)
+      const target = terminals.value.find((t) => t.id === payload.id)
+      if (target) {
+        target.isExited = true
+        target.exitCode = payload.exitCode
+        target.terminalInstance?.writeln(`\r\n\x1b[33m[Proses terminal telah selesai (Exit code: ${payload.exitCode})]\x1b[0m\r\n`)
       }
     })
   }
@@ -203,7 +316,9 @@ onMounted(() => {
 
   if (workspaceStore.isBottomPanelOpen) {
     nextTick(() => {
-      initTerminal()
+      if (terminals.value.length === 0) {
+        createTerminalTab('powershell')
+      }
     })
   }
 })
@@ -213,15 +328,18 @@ onBeforeUnmount(() => {
   if (removeDataListener) removeDataListener()
   if (removeExitListener) removeExitListener()
 
-  if (window.makaryaAPI && terminalId.value) {
-    window.makaryaAPI.killTerminal({ id: terminalId.value })
+  // Kill and dispose all terminal sessions
+  for (const term of terminals.value) {
+    if (window.makaryaAPI) {
+      window.makaryaAPI.killTerminal({ id: term.id })
+    }
+    if (term.terminalInstance) {
+      try {
+        term.terminalInstance.dispose()
+      } catch {}
+    }
   }
-
-  if (terminalInstance) {
-    try {
-      terminalInstance.dispose()
-    } catch {}
-  }
+  terminals.value = []
 })
 
 // Watch panel open/close
@@ -230,23 +348,13 @@ watch(
   (isOpen) => {
     if (isOpen) {
       nextTick(() => {
-        if (!terminalInstance) {
-          initTerminal()
+        if (terminals.value.length === 0) {
+          createTerminalTab('powershell')
         } else {
           fitTerminal()
-          terminalInstance.focus()
+          activeTerminal.value?.terminalInstance?.focus()
         }
       })
-    }
-  }
-)
-
-// Watch project root change
-watch(
-  () => workspaceStore.rootFolderPath,
-  () => {
-    if (workspaceStore.isBottomPanelOpen && isTerminalReady.value) {
-      // Prompt user or automatically inform cwd
     }
   }
 )
@@ -254,274 +362,176 @@ watch(
 
 <template>
   <div
-    class="terminal-bottom-panel"
+    class="terminal-bottom-panel flex flex-col bg-[#090d14] border-t border-white/[0.08] relative z-25 w-full overflow-hidden shadow-2xl"
     :style="{ height: `${workspaceStore.bottomPanelHeight}px` }"
-    :class="{ 'is-resizing': isResizing }"
+    :class="{ 'select-none': isResizing }"
   >
     <!-- Resize Handle -->
     <div
-      class="resizer-handle"
+      class="resizer-handle h-1.5 w-full cursor-ns-resize flex items-center justify-center absolute top-0 left-0 z-10 hover:bg-[#42b883]/10 transition-colors"
       @mousedown="handleMouseDownResize"
       title="Tarik untuk mengubah ukuran tinggi terminal"
     >
-      <div class="resizer-line"></div>
+      <div class="h-0.5 w-12 rounded-full bg-white/15 hover:w-16 hover:bg-[#42b883] transition-all"></div>
     </div>
 
-    <!-- Terminal Header Bar -->
-    <div class="terminal-header">
-      <div class="header-left">
-        <div class="tab-item active">
-          <i class="pi pi-terminal text-emerald-400"></i>
-          <span class="tab-title">TERMINAL</span>
-          <span class="shell-badge">{{ selectedShell === 'powershell' ? 'PowerShell' : 'CMD' }}</span>
+    <!-- Terminal Header Bar (Nuxt UI Rounded & Vue Green #42b883 Style) -->
+    <div class="h-8 min-h-[32px] bg-[#0c1017] border-b border-white/[0.06] flex items-center justify-between px-2.5 gap-2 mt-1 select-none">
+      <!-- Left: Terminal Tabs & Single Round Plus Button -->
+      <div class="flex items-center gap-1.5 min-w-0 overflow-x-auto no-scrollbar py-0.5">
+        <!-- Terminal Tab Items (Rounded Pill Shape) -->
+        <div class="flex items-center gap-1.5">
+          <button
+            v-for="term in terminals"
+            :key="term.id"
+            @click="selectTerminalTab(term.id)"
+            class="group relative flex items-center gap-1.5 px-3 py-0.5 rounded-full text-[11px] font-medium transition-all duration-150 border cursor-pointer select-none"
+            :class="[
+              term.id === activeTerminalId
+                ? 'bg-[#42b883]/15 text-white border-[#42b883]/35 shadow-[0_0_10px_rgba(66,184,131,0.15)]'
+                : 'bg-white/[0.02] text-slate-400 hover:text-slate-200 hover:bg-white/[0.05] border-white/[0.06]'
+            ]"
+            :title="`Shell: ${getShellBadgeName(term.shell)}`"
+          >
+            <!-- Shell Icon in Vue Green -->
+            <UIcon
+              :name="term.shell === 'powershell' ? 'i-lucide-terminal' : term.shell === 'cmd' ? 'i-lucide-command' : 'i-lucide-code-2'"
+              class="size-3.5 flex-shrink-0"
+              :class="[
+                term.id === activeTerminalId ? 'text-[#42b883] opacity-100' : 'text-slate-400 group-hover:text-[#42b883] opacity-70 group-hover:opacity-100'
+              ]"
+            />
+
+            <span class="font-mono text-[10.5px] tracking-tight whitespace-nowrap" :class="term.id === activeTerminalId ? 'font-semibold text-white' : 'text-slate-300'">
+              {{ term.title }}
+            </span>
+
+            <!-- Close Tab Button -->
+            <span
+              @click.stop="closeTerminalTab(term.id, $event)"
+              class="size-3.5 rounded-full flex items-center justify-center text-slate-400 hover:text-white hover:bg-rose-500/30 transition-all ml-0.5"
+              :class="term.id === activeTerminalId ? 'opacity-80 hover:opacity-100' : 'opacity-0 group-hover:opacity-100'"
+              title="Tutup Terminal"
+            >
+              <UIcon name="i-lucide-x" class="size-2.5" />
+            </span>
+          </button>
         </div>
 
-        <!-- Shell Selector -->
-        <div class="shell-selector">
+        <!-- Add New Terminal Button (Clean Single Round Plus Button) -->
+        <button
+          class="size-6 rounded-full bg-white/[0.03] hover:bg-[#42b883]/15 text-slate-400 hover:text-[#42b883] border border-white/[0.08] hover:border-[#42b883]/35 transition-all flex items-center justify-center cursor-pointer ml-0.5 shadow-xs"
+          @click="createTerminalTab(activeTerminal?.shell || 'powershell')"
+          title="Buka Terminal Baru"
+        >
+          <UIcon name="i-lucide-plus" class="size-3.5" />
+        </button>
+      </div>
+
+      <!-- Right: Rounded Active Terminal Toolbar Controls -->
+      <div class="flex items-center gap-2 flex-shrink-0">
+        <!-- Shell Type Switcher in Rounded Pill -->
+        <div v-if="activeTerminal" class="flex items-center p-0.5 rounded-full bg-white/[0.03] border border-white/[0.08]">
           <button
-            class="shell-btn"
-            :class="{ active: selectedShell === 'powershell' }"
-            @click="handleSwitchShell('powershell')"
-            title="Gunakan PowerShell"
+            class="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold transition-all cursor-pointer"
+            :class="activeTerminal.shell === 'powershell' ? 'bg-[#42b883]/25 text-[#42b883] border border-[#42b883]/40 font-bold shadow-xs' : 'text-slate-400 hover:text-slate-200'"
+            @click="handleSwitchActiveShell('powershell')"
+            title="Ubah shell aktif ke PowerShell"
           >
             PS
           </button>
           <button
-            class="shell-btn"
-            :class="{ active: selectedShell === 'cmd' }"
-            @click="handleSwitchShell('cmd')"
-            title="Gunakan Command Prompt (cmd)"
+            class="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold transition-all cursor-pointer"
+            :class="activeTerminal.shell === 'cmd' ? 'bg-[#42b883]/25 text-[#42b883] border border-[#42b883]/40 font-bold shadow-xs' : 'text-slate-400 hover:text-slate-200'"
+            @click="handleSwitchActiveShell('cmd')"
+            title="Ubah shell aktif ke Command Prompt (cmd)"
           >
             CMD
           </button>
+          <button
+            class="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold transition-all cursor-pointer"
+            :class="activeTerminal.shell === 'bash' ? 'bg-[#42b883]/25 text-[#42b883] border border-[#42b883]/40 font-bold shadow-xs' : 'text-slate-400 hover:text-slate-200'"
+            @click="handleSwitchActiveShell('bash')"
+            title="Ubah shell aktif ke Git Bash"
+          >
+            BASH
+          </button>
         </div>
-      </div>
 
-      <div class="header-right">
-        <!-- Working dir indicator -->
+        <!-- Working Directory Rounded Pill Badge -->
         <div
           v-if="workspaceStore.rootFolderPath"
-          class="cwd-indicator"
-          :title="`CWD: ${workspaceStore.rootFolderPath}`"
+          class="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-white/[0.02] border border-white/[0.06] text-[10px] text-slate-300 max-w-[140px] truncate"
+          :title="`Working Dir: ${workspaceStore.rootFolderPath}`"
         >
-          <i class="pi pi-folder text-xs"></i>
-          <span>{{ workspaceStore.rootFolderPath.split(/[\\/]/).pop() }}</span>
+          <UIcon name="i-lucide-folder" class="size-3 text-[#42b883] flex-shrink-0" />
+          <span class="truncate font-mono">{{ workspaceStore.rootFolderPath.split(/[\\/]/).pop() }}</span>
         </div>
 
-        <button
-          class="action-btn"
-          @click="handleClearTerminal"
-          title="Bersihkan Tampilan (Clear)"
-        >
-          <i class="pi pi-ban"></i>
-        </button>
+        <!-- Action Icon Buttons (Rounded Full) -->
+        <div class="flex items-center gap-1">
+          <button
+            class="size-6 rounded-full flex items-center justify-center text-slate-400 hover:text-[#42b883] hover:bg-[#42b883]/10 transition-colors cursor-pointer"
+            @click="handleClearTerminal"
+            title="Bersihkan Tampilan (Clear)"
+          >
+            <UIcon name="i-lucide-ban" class="size-3.5" />
+          </button>
 
-        <button
-          class="action-btn"
-          @click="handleRestartTerminal"
-          title="Mulai Ulang Sesi Terminal (Restart)"
-        >
-          <i class="pi pi-refresh"></i>
-        </button>
+          <button
+            class="size-6 rounded-full flex items-center justify-center text-slate-400 hover:text-[#42b883] hover:bg-[#42b883]/10 transition-colors cursor-pointer"
+            @click="handleRestartTerminal"
+            title="Mulai Ulang Sesi Terminal (Restart)"
+          >
+            <UIcon name="i-lucide-rotate-cw" class="size-3.5" />
+          </button>
 
-        <button
-          class="action-btn close-btn"
-          @click="handleClosePanel"
-          title="Tutup Panel Terminal (Ctrl+`)"
-        >
-          <i class="pi pi-times"></i>
-        </button>
+          <button
+            v-if="activeTerminal"
+            class="size-6 rounded-full flex items-center justify-center text-slate-400 hover:text-rose-400 hover:bg-rose-500/15 transition-colors cursor-pointer"
+            @click="closeTerminalTab(activeTerminal.id)"
+            title="Hapus / Tutup Terminal Ini"
+          >
+            <UIcon name="i-lucide-trash-2" class="size-3.5" />
+          </button>
+
+          <div class="h-3.5 w-px bg-white/10 mx-0.5"></div>
+
+          <button
+            class="size-6 rounded-full flex items-center justify-center text-slate-400 hover:text-rose-400 hover:bg-rose-500/20 transition-colors cursor-pointer"
+            @click="handleClosePanel"
+            title="Sembunyikan Panel Terminal (Ctrl+`)"
+          >
+            <UIcon name="i-lucide-x" class="size-3.5" />
+          </button>
+        </div>
       </div>
     </div>
 
-    <!-- Terminal Body Container -->
-    <div class="terminal-body" ref="terminalContainerRef"></div>
+    <!-- Terminal Body: Isolated DOM container per active session -->
+    <div class="terminal-body-wrapper flex-1 w-full relative overflow-hidden">
+      <div
+        v-for="term in terminals"
+        :key="term.id"
+        v-show="term.id === activeTerminalId"
+        class="terminal-instance-container w-full h-full p-1.5 box-border"
+        :ref="(el) => { terminalContainers[term.id] = el as HTMLDivElement }"
+      ></div>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.terminal-bottom-panel {
-  display: flex;
-  flex-direction: column;
-  background: #090d14;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  position: relative;
-  z-index: 25;
-  width: 100%;
-  overflow: hidden;
-  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.35);
-}
-
-.terminal-bottom-panel.is-resizing {
-  user-select: none;
-}
-
-/* Resize Handle */
-.resizer-handle {
-  height: 6px;
-  width: 100%;
-  cursor: ns-resize;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: absolute;
-  top: 0;
-  left: 0;
-  z-index: 10;
-  transition: background 0.15s ease;
-}
-
-.resizer-line {
-  height: 2px;
-  width: 48px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.15);
-  transition: all 0.2s ease;
-}
-
-.resizer-handle:hover .resizer-line,
-.terminal-bottom-panel.is-resizing .resizer-line {
-  background: #10b981;
-  width: 72px;
-  box-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
-}
-
-.resizer-handle:hover {
-  background: rgba(16, 185, 129, 0.08);
-}
-
-/* Header Bar */
-.terminal-header {
-  height: 32px;
-  min-height: 32px;
-  background: #0d121c;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 10px;
-  font-family: inherit;
-  margin-top: 4px;
-}
-
-.header-left {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.tab-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  color: #94a3b8;
-  padding: 3px 8px;
-  border-radius: 4px;
-}
-
-.tab-item.active {
-  color: #f1f5f9;
-  background: rgba(255, 255, 255, 0.04);
-}
-
-.shell-badge {
-  font-size: 10px;
-  font-weight: 500;
-  padding: 1px 5px;
-  border-radius: 3px;
-  background: rgba(16, 185, 129, 0.12);
-  color: #34d399;
-  border: 1px solid rgba(16, 185, 129, 0.25);
-}
-
-.shell-selector {
-  display: flex;
-  align-items: center;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 4px;
-  padding: 1px;
-}
-
-.shell-btn {
-  background: transparent;
-  border: none;
-  color: #64748b;
-  font-size: 10px;
-  font-weight: 600;
-  padding: 2px 6px;
-  border-radius: 3px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.shell-btn:hover {
-  color: #cbd5e1;
-}
-
-.shell-btn.active {
-  background: rgba(16, 185, 129, 0.2);
-  color: #10b981;
-}
-
-.header-right {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.cwd-indicator {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  color: #64748b;
-  background: rgba(255, 255, 255, 0.03);
-  padding: 2px 8px;
-  border-radius: 4px;
-  max-width: 140px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  border: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.action-btn {
-  background: transparent;
-  border: none;
-  color: #64748b;
-  width: 24px;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 11px;
-  transition: all 0.15s ease;
-}
-
-.action-btn:hover {
-  background: rgba(255, 255, 255, 0.06);
-  color: #e2e8f0;
-}
-
-.action-btn.close-btn:hover {
-  background: rgba(239, 68, 68, 0.18);
-  color: #ef4444;
-}
-
-/* Terminal Body */
-.terminal-body {
-  flex: 1;
-  width: 100%;
+.terminal-body-wrapper {
   height: calc(100% - 36px);
-  padding: 4px 8px;
-  overflow: hidden;
-  box-sizing: border-box;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
 
 :deep(.xterm) {

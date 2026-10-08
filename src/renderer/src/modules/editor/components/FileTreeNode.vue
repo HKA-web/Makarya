@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, inject } from 'vue'
 import type { FileEntry } from '../../../preload/index'
 import { getNuxtFileIcon } from '@renderer/utils/languageDetector'
 import { useWorkspaceStore } from '@renderer/stores/workspaceStore'
@@ -15,6 +15,21 @@ const emit = defineEmits<{
 
 const workspaceStore = useWorkspaceStore()
 const isLoadingChildren = ref(false)
+
+const showFileTooltip = inject<((entry: FileEntry, el: HTMLElement) => void) | undefined>('showFileTooltip')
+const hideFileTooltip = inject<(() => void) | undefined>('hideFileTooltip')
+
+function handleMouseEnter(event: MouseEvent): void {
+  if (showFileTooltip) {
+    showFileTooltip(props.entry, event.currentTarget as HTMLElement)
+  }
+}
+
+function handleMouseLeave(): void {
+  if (hideFileTooltip) {
+    hideFileTooltip()
+  }
+}
 
 const isExpanded = computed(() => !!workspaceStore.expandedFolderPaths[props.entry.path])
 const childEntries = computed(() => {
@@ -56,6 +71,8 @@ function handleDragStart(event: DragEvent): void {
       draggable="true"
       @dragstart="handleDragStart"
       @click="handleClick"
+      @mouseenter="handleMouseEnter"
+      @mouseleave="handleMouseLeave"
       @contextmenu.prevent="emit('openContextMenu', { event: $event, entry: props.entry })"
       :style="{ paddingLeft: `${((props.depth || 0) * 14) + 8}px` }"
       class="flex items-center gap-1.5 py-1 pr-3 hover:bg-white/[0.04] cursor-pointer rounded-md group transition-all relative w-full text-[11px]"
@@ -63,7 +80,6 @@ function handleDragStart(event: DragEvent): void {
         workspaceStore.activeTab.filePath === entry.path ? 'bg-[#42b883]/10 text-[#42b883] font-medium border-l-2 border-[#42b883]' : 'text-slate-300 hover:text-white',
         workspaceStore.copiedEntry?.path === entry.path ? 'ring-1 ring-dashed ring-[#42b883]/80 bg-[#42b883]/10' : ''
       ]"
-      :title="entry.name"
     >
       <UIcon
         v-if="entry.isDirectory"

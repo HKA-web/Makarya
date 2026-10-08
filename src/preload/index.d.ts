@@ -222,6 +222,56 @@ export interface ElectronAPI {
   onTerminalData: (callback: (payload: { id: string; data: string }) => void) => () => void
   onTerminalExit: (callback: (payload: { id: string; exitCode: number }) => void) => () => void
 
+  // Global Code & Text Search in Files
+  findInFiles: (options: {
+    query: string
+    rootPaths?: string[]
+    isRegex?: boolean
+    isCaseSensitive?: boolean
+    matchWholeWord?: boolean
+    includePattern?: string
+    excludePattern?: string
+    maxResults?: number
+    offset?: number
+  }) => Promise<{
+    results: Array<{
+      filePath: string
+      fileName: string
+      relativePath: string
+      rootPath: string
+      matches: Array<{
+        lineNumber: number
+        lineContent: string
+        matchStart: number
+        matchEnd: number
+      }>
+    }>
+    totalMatches: number
+    totalFiles: number
+    hasMore: boolean
+    offset: number
+    limit: number
+    truncated: boolean
+  }>
+
+  // Auto / Mandatory Updater APIs
+  checkForUpdates: () => Promise<{
+    success: boolean
+    hasUpdate: boolean
+    currentVersion: string
+    latestVersion: string
+    releaseTitle: string
+    releaseNotes: string
+    publishedAt: string
+    downloadUrl?: string
+    fileName?: string
+    fileSizeBytes?: number
+    htmlUrl?: string
+    errorMessage?: string
+  }>
+  downloadUpdate: (downloadUrl: string, targetFileName?: string) => Promise<{ success: boolean; filePath?: string; error?: string }>
+  installUpdate: (installerPath: string) => Promise<{ success: boolean; error?: string }>
+  onUpdateDownloadProgress: (callback: (data: { percent: number; transferredBytes: number; totalBytes: number; speedMbps: number }) => void) => () => void
 }
 
 declare global {

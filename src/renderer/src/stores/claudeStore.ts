@@ -66,18 +66,16 @@ export interface ClaudeSessionItem {
 }
 
 export const DEFAULT_CLAUDE_MODELS: ClaudeModelItem[] = [
-  { id: 'ag/claude-sonnet-4-6', name: 'Claude Sonnet 4.6', provider: 'Anthropic', category: 'Claude Recommended', isFree: false },
   { id: 'claude-3-7-sonnet-20250219', name: 'Claude 3.7 Sonnet (Thinking)', provider: 'Anthropic', category: 'Claude Recommended', isFree: false },
   { id: 'claude-3-5-sonnet-20241022', name: 'Claude 3.5 Sonnet v2', provider: 'Anthropic', category: 'Claude 3.5 Series', isFree: false },
   { id: 'claude-3-5-haiku-20241022', name: 'Claude 3.5 Haiku', provider: 'Anthropic', category: 'Claude 3.5 Series', isFree: true },
-  { id: 'claude-3-opus-20240229', name: 'Claude 3 Opus', provider: 'Anthropic', category: 'Claude Legacy', isFree: false },
-  { id: 'Antigravity', name: 'Antigravity Router', provider: 'Antigravity', category: 'Recent', isFree: true }
+  { id: 'claude-3-opus-20240229', name: 'Claude 3 Opus', provider: 'Anthropic', category: 'Claude Legacy', isFree: false }
 ]
 
 export const useClaudeStore = defineStore('claudeStore', () => {
   const isConnected = ref<boolean>(true)
   const isExecuting = ref<boolean>(false)
-  const currentModel = ref<string>('ag/claude-sonnet-4-6')
+  const currentModel = ref<string>('claude-3-7-sonnet-20250219')
   const models = ref<ClaudeModelItem[]>([...DEFAULT_CLAUDE_MODELS])
   const availableModels = ref<string[]>([...DEFAULT_CLAUDE_MODELS.map((m) => m.id)])
   const executionMode = ref<'agent' | 'chat' | 'plan'>('agent')
@@ -137,7 +135,7 @@ export const useClaudeStore = defineStore('claudeStore', () => {
 
           if (!models.value.some((m) => m.id === currentModel.value)) {
             const defaultMdl =
-              models.value.find((m) => m.id === 'ag/claude-sonnet-4-6' || m.id.includes('claude-3-7') || m.id.includes('claude')) ||
+              models.value.find((m) => m.id.includes('claude-3-7') || m.id.includes('claude-3-5-sonnet') || m.id.includes('claude')) ||
               models.value[0]
             if (defaultMdl) {
               currentModel.value = defaultMdl.id
@@ -153,14 +151,15 @@ export const useClaudeStore = defineStore('claudeStore', () => {
           const dynamicModels: ClaudeModelItem[] = []
           for (const item of fetched) {
             const modelId = typeof item === 'string' ? item : item.id || item.name
-            if (modelId && (modelId.toLowerCase().includes('claude') || modelId.toLowerCase().includes('anthropic') || modelId === 'Antigravity')) {
+            if (modelId && (modelId.toLowerCase().includes('claude') || modelId.toLowerCase().includes('anthropic') || modelId.toLowerCase().includes('antigravity'))) {
               const cleanName = modelId.split('/').pop() || modelId
+              const isAntigravity = modelId.toLowerCase().includes('antigravity')
               dynamicModels.push({
                 id: modelId,
                 name: cleanName,
-                provider: 'Anthropic',
-                category: 'Claude Gateway',
-                isFree: modelId.includes('haiku') || modelId.includes('free')
+                provider: isAntigravity ? 'Antigravity' : 'Anthropic',
+                category: isAntigravity ? 'Recent' : 'Claude Gateway',
+                isFree: modelId.includes('haiku') || modelId.includes('free') || isAntigravity
               })
             }
           }

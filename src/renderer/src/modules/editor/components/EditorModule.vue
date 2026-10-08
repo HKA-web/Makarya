@@ -12,6 +12,7 @@ import ClaudePanel from './ClaudePanel.vue'
 import TerminalPanel from './TerminalPanel.vue'
 import CommandPalette from './CommandPalette.vue'
 import QuickOpenModal from './QuickOpenModal.vue'
+import GlobalSearchModal from './GlobalSearchModal.vue'
 import WindowSwitcherModal from './WindowSwitcherModal.vue'
 import TabSwitcherModal from './TabSwitcherModal.vue'
 import AboutModal from './AboutModal.vue'
@@ -84,6 +85,65 @@ function handleTabBarWheel(e: WheelEvent): void {
   if (el) {
     el.scrollLeft += e.deltaY
   }
+}
+
+function getTabContextInfo(tab: { filePath?: string; title: string }): string {
+  if (!tab.filePath) return ''
+  const matchingRoot = workspaceStore.workspaceRoots.find((r) => {
+    const normRoot = r.path.replace(/\\/g, '/').toLowerCase()
+    const normFile = tab.filePath!.replace(/\\/g, '/').toLowerCase()
+    return normFile.startsWith(normRoot + '/') || normFile === normRoot
+  })
+
+  const rootName = matchingRoot?.name || ''
+  const normFile = tab.filePath.replace(/\\/g, '/')
+  const normRoot = matchingRoot ? matchingRoot.path.replace(/\\/g, '/') : ''
+  const rel = normRoot ? normFile.slice(normRoot.length).replace(/^\//, '') : normFile
+  const parts = rel.split('/').filter(Boolean)
+  const parentFolder = parts.length > 1 ? parts[parts.length - 2] : ''
+
+  if (rootName && parentFolder && parentFolder !== rootName) {
+    return `${rootName} • ${parentFolder}`
+  } else if (rootName) {
+    return rootName
+  } else if (parentFolder) {
+    return parentFolder
+  }
+  return ''
+}
+
+function getTabProjectName(tab: { filePath?: string }): string {
+  if (!tab.filePath) return ''
+  const matchingRoot = workspaceStore.workspaceRoots.find((r) => {
+    const normRoot = r.path.replace(/\\/g, '/').toLowerCase()
+    const normFile = tab.filePath!.replace(/\\/g, '/').toLowerCase()
+    return normFile.startsWith(normRoot + '/') || normFile === normRoot
+  })
+  return matchingRoot?.name || ''
+}
+
+const hoverTooltip = ref<{ tab: any; x: number; y: number } | null>(null)
+let tabHoverTimer: ReturnType<typeof setTimeout> | null = null
+
+function handleTabMouseEnter(tab: any, event: MouseEvent): void {
+  if (tabHoverTimer) clearTimeout(tabHoverTimer)
+  const target = event.currentTarget as HTMLElement
+  if (!target || !tab.filePath) return
+
+  tabHoverTimer = setTimeout(() => {
+    const rect = target.getBoundingClientRect()
+    const x = Math.max(12, Math.min(rect.left, window.innerWidth - 420))
+    const y = rect.bottom + 8
+    hoverTooltip.value = { tab, x, y }
+  }, 180)
+}
+
+function handleTabMouseLeave(): void {
+  if (tabHoverTimer) {
+    clearTimeout(tabHoverTimer)
+    tabHoverTimer = null
+  }
+  hoverTooltip.value = null
 }
 
 function handleCloseOtherTabs(): void {
@@ -471,19 +531,29 @@ onUnmounted(() => {
               v-for="tab in workspaceStore.tabList"
               :key="tab.id"
               @click="workspaceStore.setActiveTab(tab.id)"
+              @mouseenter="handleTabMouseEnter(tab, $event)"
+              @mouseleave="handleTabMouseLeave"
               :class="[
                 'h-7 px-3 flex items-center gap-1.5 text-xs rounded-full cursor-pointer select-none group relative transition-all flex-shrink-0 border shadow-xs',
                 workspaceStore.activeTabId === tab.id
                   ? 'bg-[#131d2e] text-[#42b883] font-semibold border-[#42b883]/45 shadow-sm shadow-[#42b883]/10 ring-1 ring-[#42b883]/20'
                   : 'bg-white/[0.03] text-slate-400 hover:text-slate-200 hover:bg-white/[0.07] border-white/[0.04] hover:border-white/[0.1]'
               ]"
-              :title="tab.filePath || tab.title"
             >
               <UIcon
                 :name="getNuxtFileIcon(tab.title, false).icon"
                 :class="[getNuxtFileIcon(tab.title, false).colorClass, 'size-3.5 flex-shrink-0']"
               />
-              <span class="truncate max-w-[140px] text-[11px] font-medium">{{ tab.title }}</span>
+              <div class="flex items-baseline gap-1.5 min-w-0 max-w-[200px]">
+                <span class="truncate text-[11px] font-medium">{{ tab.title }}</span>
+                <span
+                  v-if="getTabContextInfo(tab)"
+                  class="text-[9.5px] font-mono truncate max-w-[90px] transition-colors select-none"
+                  :class="workspaceStore.activeTabId === tab.id ? 'text-[#42b883]/70' : 'text-slate-500 group-hover:text-slate-400'"
+                >
+                  {{ getTabContextInfo(tab) }}
+                </span>
+              </div>
               <span
                 v-if="tab.isDirty"
                 class="w-1.5 h-1.5 rounded-full bg-amber-400 shadow-sm shadow-amber-400/50 ml-0.5 flex-shrink-0"
@@ -543,7 +613,7 @@ onUnmounted(() => {
               <img :src="logoImg" alt="Makarya Logo" class="w-full h-full object-contain drop-shadow-xl rounded-2xl" />
             </div>
             <div class="space-y-1.5">
-              <h1 class="text-2xl font-bold vue-gradient-text tracking-wide">Makarya Code Editor</h1>
+              <h1 class="text-2xl font-bold vue-gradient-text tracking-wide">Code Editor</h1>
               <p class="text-xs text-slate-400 max-w-md mx-auto leading-relaxed">
                 Editor kode modern terintegrasi Monaco Editor dan agen kecerdasan buatan berbasis
                 <span class="inline-flex items-center gap-1 font-semibold text-slate-200">
@@ -588,7 +658,51 @@ onUnmounted(() => {
     <TabSwitcherModal />
     <WindowSwitcherModal />
     <QuickOpenModal />
+    <GlobalSearchModal />
     <CommandPalette />
     <AboutModal v-model:visible="workspaceStore.isAboutModalOpen" />
+
+    <!-- Dark Glassmorphism Nuxt UI Style Tooltip for Editor Tabs -->
+    <Teleport to="body">
+      <Transition
+        enter-active-class="transition duration-150 ease-out"
+        enter-from-class="opacity-0 translate-y-1 scale-95"
+        enter-to-class="opacity-100 translate-y-0 scale-100"
+        leave-active-class="transition duration-100 ease-in"
+        leave-from-class="opacity-100 translate-y-0 scale-100"
+        leave-to-class="opacity-0 translate-y-1 scale-95"
+      >
+        <div
+          v-if="hoverTooltip && hoverTooltip.tab.filePath"
+          class="fixed z-[9999] pointer-events-none px-3 py-2 rounded-xl bg-[#090e17]/95 backdrop-blur-2xl border border-white/[0.14] shadow-[0_15px_35px_-5px_rgba(0,0,0,0.8)] flex flex-col gap-1 max-w-lg ring-1 ring-white/[0.08]"
+          :style="{
+            left: `${hoverTooltip.x}px`,
+            top: `${hoverTooltip.y}px`
+          }"
+        >
+          <!-- Header: File name + Project Name badge -->
+          <div class="flex items-center justify-between gap-3">
+            <div class="flex items-center gap-1.5 min-w-0">
+              <UIcon
+                :name="getNuxtFileIcon(hoverTooltip.tab.title, false).icon"
+                :class="[getNuxtFileIcon(hoverTooltip.tab.title, false).colorClass, 'size-3.5 flex-shrink-0']"
+              />
+              <span class="text-xs font-semibold text-white font-mono truncate">{{ hoverTooltip.tab.title }}</span>
+            </div>
+            <span
+              v-if="getTabProjectName(hoverTooltip.tab)"
+              class="px-1.5 py-0.2 rounded-md bg-[#42b883]/15 border border-[#42b883]/30 text-[#42b883] font-mono text-[9px] font-bold uppercase tracking-wider flex-shrink-0"
+            >
+              {{ getTabProjectName(hoverTooltip.tab) }}
+            </span>
+          </div>
+
+          <!-- Full path in clean dimmed monospace -->
+          <div class="text-[10.5px] text-slate-400 font-mono break-all leading-tight select-none">
+            {{ hoverTooltip.tab.filePath }}
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>

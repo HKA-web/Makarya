@@ -492,6 +492,11 @@ onMounted(() => {
     suggest: {
       showWords: true,
       showSnippets: true
+    },
+    find: {
+      addExtraSpaceOnTop: true,
+      autoFindInSelection: 'multiline',
+      seedSearchStringFromSelection: 'always'
     }
   })
 
@@ -585,6 +590,35 @@ onMounted(() => {
     keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyL],
     run: (ed) => {
       tagEditorSelectionToAgent(ed)
+    }
+  })
+
+  // Explicit Find (Ctrl+F) & Replace (Ctrl+H) actions
+  editorInstance.addAction({
+    id: 'makarya.openFindWidget',
+    label: 'Find in File',
+    keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyF],
+    run: (ed) => {
+      const findAction = ed.getAction('actions.find')
+      if (findAction) {
+        findAction.run()
+      } else {
+        ed.trigger('keyboard', 'actions.find', {})
+      }
+    }
+  })
+
+  editorInstance.addAction({
+    id: 'makarya.openFindReplaceWidget',
+    label: 'Replace in File',
+    keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyH],
+    run: (ed) => {
+      const replaceAction = ed.getAction('editor.action.startFindReplaceAction')
+      if (replaceAction) {
+        replaceAction.run()
+      } else {
+        ed.trigger('keyboard', 'editor.action.startFindReplaceAction', {})
+      }
     }
   })
 

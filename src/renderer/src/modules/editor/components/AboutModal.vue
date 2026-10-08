@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import Dialog from 'primevue/dialog'
 import logoImg from '@renderer/assets/logo.png'
+import { useUpdateStore } from '@renderer/stores/updateStore'
 
 defineProps<{
   visible: boolean
@@ -10,8 +12,24 @@ const emit = defineEmits<{
   (e: 'update:visible', val: boolean): void
 }>()
 
+const updateStore = useUpdateStore()
+const appVersion = typeof __APP_BUILD_DATE__ !== 'undefined' ? __APP_BUILD_DATE__ : 'v2026.10.08.22.50'
+const buildTimestamp = typeof __APP_BUILD_TIMESTAMP__ !== 'undefined' ? __APP_BUILD_TIMESTAMP__ : '8 Okt 2026, 22.50'
+const checkStatusMsg = ref<string | null>(null)
+
 function close(): void {
+  checkStatusMsg.value = null
   emit('update:visible', false)
+}
+
+async function handleCheckUpdates(): Promise<void> {
+  checkStatusMsg.value = null
+  const res = await updateStore.checkManual()
+  if (res && !res.hasUpdate) {
+    checkStatusMsg.value = 'Aplikasi sudah versi terbaru!'
+  } else if (!res?.success) {
+    checkStatusMsg.value = res?.errorMessage || 'Gagal memeriksa pembaruan.'
+  }
 }
 </script>
 
@@ -71,9 +89,9 @@ function close(): void {
 
         <div class="min-w-0 flex-1">
           <div class="flex items-center gap-2 flex-wrap">
-            <h4 class="text-base font-extrabold text-white tracking-tight">Makarya Code Editor</h4>
+            <h4 class="text-base font-extrabold text-white tracking-tight">Makarya IDE</h4>
             <span class="px-2 py-0.5 rounded-full bg-[#42b883]/20 border border-[#42b883]/40 text-[#42b883] font-mono text-[10px] font-bold">
-              v0.1.0
+              {{ appVersion }}
             </span>
           </div>
           <p class="text-xs text-slate-300 mt-1 leading-relaxed">
@@ -119,8 +137,8 @@ function close(): void {
           </div>
 
           <div class="p-2.5 rounded-xl bg-white/[0.02] border border-white/[0.06] flex items-center justify-between">
-            <span class="text-slate-400">AI Gateway:</span>
-            <span class="font-mono text-amber-300 font-semibold">9router AI Engine</span>
+            <span class="text-slate-400">Build Date:</span>
+            <span class="font-mono text-cyan-300 font-semibold">{{ buildTimestamp }}</span>
           </div>
 
           <div class="p-2.5 rounded-xl bg-white/[0.02] border border-white/[0.06] flex items-center justify-between">
@@ -133,16 +151,36 @@ function close(): void {
 
     <!-- Modal Footer -->
     <div class="px-6 py-3.5 border-t border-white/[0.08] bg-black/30 flex items-center justify-between text-xs">
-      <span class="text-[11px] text-slate-500 font-mono">
-        © 2026 Makarya. All rights reserved.
-      </span>
+      <div class="flex items-center gap-2">
+        <span class="text-[11px] text-slate-500 font-mono">
+          © 2026 Makarya.
+        </span>
+        <span v-if="checkStatusMsg" class="text-[11px] text-emerald-400 font-medium">
+          • {{ checkStatusMsg }}
+        </span>
+      </div>
 
-      <button
-        @click="close"
-        class="px-4 py-1.5 rounded-xl bg-[#42b883] hover:bg-[#34d399] text-[#090d14] font-semibold text-xs shadow-md shadow-[#42b883]/30 active:scale-95 transition-all cursor-pointer"
-      >
-        Tutup
-      </button>
+      <div class="flex items-center gap-2">
+        <button
+          @click="handleCheckUpdates"
+          :disabled="updateStore.isChecking"
+          class="px-3 py-1.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] text-slate-300 hover:text-white font-medium text-xs border border-white/10 active:scale-95 transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+        >
+          <UIcon
+            :name="updateStore.isChecking ? 'i-lucide-loader-2' : 'i-lucide-refresh-cw'"
+            :class="{ 'animate-spin': updateStore.isChecking }"
+            class="size-3.5 text-emerald-400"
+          />
+          <span>{{ updateStore.isChecking ? 'Memeriksa...' : 'Periksa Pembaruan' }}</span>
+        </button>
+
+        <button
+          @click="close"
+          class="px-4 py-1.5 rounded-xl bg-[#42b883] hover:bg-[#34d399] text-[#090d14] font-semibold text-xs shadow-md shadow-[#42b883]/30 active:scale-95 transition-all cursor-pointer"
+        >
+          Tutup
+        </button>
+      </div>
     </div>
   </Dialog>
 </template>

@@ -7,18 +7,21 @@ import { useWorkspaceStore } from './stores/workspaceStore'
 import { useSettingsStore } from './stores/settingsStore'
 import { useAgentStore } from './stores/agentStore'
 import { usePluginStore } from './stores/pluginStore'
+import { useUpdateStore } from './stores/updateStore'
 import { ModularAppContainer, useProductionRegistry } from './modules'
 import { globalPluginEvents } from './sdk/runtime'
 import AboutModal from './modules/editor/components/AboutModal.vue'
 import SettingsModal from './modules/editor/components/SettingsModal.vue'
 import PluginManagerModal from './modules/editor/components/PluginManagerModal.vue'
 import DatabaseConnectionModal from './modules/editor/components/DatabaseConnectionModal.vue'
+import MandatoryUpdateModal from './modules/editor/components/MandatoryUpdateModal.vue'
 import iconImg from './assets/icon.jpg'
 
 const workspaceStore = useWorkspaceStore()
 const settingsStore = useSettingsStore()
 const agentStore = useAgentStore()
 const pluginStore = usePluginStore()
+const updateStore = useUpdateStore()
 const toast = useToast()
 const { activeModule } = useProductionRegistry()
 
@@ -93,6 +96,54 @@ async function handleGlobalKeyboard(event: KeyboardEvent): Promise<void> {
   } else if (isModifier && event.key.toLowerCase() === 'w') {
     event.preventDefault()
     workspaceStore.closeTab(workspaceStore.activeTabId)
+  } else if (isModifier && event.shiftKey && event.key.toLowerCase() === 'f') {
+    // Global Search in Files (Ctrl+Shift+F)
+    event.preventDefault()
+    workspaceStore.toggleGlobalSearch()
+  } else if (isModifier && !event.shiftKey && event.key.toLowerCase() === 'f') {
+    // Global Find shortcut: Focus active editor and open Find Widget
+    const activeEl = document.activeElement as HTMLElement | null
+    const isInsideModalOrInput =
+      activeEl &&
+      (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA') &&
+      !activeEl.classList.contains('inputarea') &&
+      !activeEl.closest('.monaco-findInput')
+
+    if (!isInsideModalOrInput) {
+      const activeEditor = workspaceStore.getActiveEditorInstance()
+      if (activeEditor) {
+        event.preventDefault()
+        activeEditor.focus()
+        const findAction = activeEditor.getAction('actions.find')
+        if (findAction) {
+          findAction.run()
+        } else {
+          activeEditor.trigger('keyboard', 'actions.find', {})
+        }
+      }
+    }
+  } else if (isModifier && !event.shiftKey && event.key.toLowerCase() === 'h') {
+    // Global Find & Replace shortcut
+    const activeEl = document.activeElement as HTMLElement | null
+    const isInsideModalOrInput =
+      activeEl &&
+      (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA') &&
+      !activeEl.classList.contains('inputarea') &&
+      !activeEl.closest('.monaco-findInput')
+
+    if (!isInsideModalOrInput) {
+      const activeEditor = workspaceStore.getActiveEditorInstance()
+      if (activeEditor) {
+        event.preventDefault()
+        activeEditor.focus()
+        const replaceAction = activeEditor.getAction('editor.action.startFindReplaceAction')
+        if (replaceAction) {
+          replaceAction.run()
+        } else {
+          activeEditor.trigger('keyboard', 'editor.action.startFindReplaceAction', {})
+        }
+      }
+    }
   }
 }
 
@@ -139,6 +190,9 @@ onMounted(async () => {
   ])
 
   pluginStore.registerBuiltinPlugins()
+
+  // Inisialisasi pengecekan pembaruan wajib (Mandatory Update Check)
+  updateStore.initStartupCheck()
 })
 
 onUnmounted(() => {
@@ -208,11 +262,11 @@ async function handleMenuAddWorkspace(): Promise<void> {
           @click="workspaceStore.openAboutModal()"
           class="flex items-center gap-2 cursor-pointer group px-1.5 py-0.5 rounded-lg hover:bg-white/[0.08] transition-colors border border-transparent hover:border-white/[0.1] active:scale-95"
           style="-webkit-app-region: no-drag;"
-          title="Tentang Makarya (About)"
+          title="Tentang Makarya IDE (About)"
         >
           <!-- Makarya Logo Icon -->
-          <img :src="iconImg" alt="Makarya Logo" class="h-6 w-auto object-contain drop-shadow-md select-none mr-0.5 group-hover:scale-105 transition-transform" />
-          <span class="text-xs font-semibold text-slate-300 group-hover:text-white tracking-wide font-sans">Makarya</span>
+          <img :src="iconImg" alt="Makarya IDE Logo" class="h-6 w-auto object-contain drop-shadow-md select-none mr-0.5 group-hover:scale-105 transition-transform" />
+          <span class="text-xs font-semibold text-slate-300 group-hover:text-white tracking-wide font-sans">Makarya IDE</span>
         </button>
 
         <!-- Right Header Actions & Window Controls -->
@@ -316,6 +370,7 @@ async function handleMenuAddWorkspace(): Promise<void> {
       <SettingsModal />
       <PluginManagerModal />
       <DatabaseConnectionModal />
+      <MandatoryUpdateModal />
       <Toast position="bottom-right" />
       <ConfirmDialog />
     </div>

@@ -343,6 +343,73 @@ const makaryaAPI = {
     return (): void => {
       ipcRenderer.removeListener('terminal:exit', listener)
     }
+  },
+
+  // Global Code & Text Search in Files
+  findInFiles: (options: {
+    query: string
+    rootPaths?: string[]
+    isRegex?: boolean
+    isCaseSensitive?: boolean
+    matchWholeWord?: boolean
+    includePattern?: string
+    excludePattern?: string
+    maxResults?: number
+    offset?: number
+  }): Promise<{
+    results: Array<{
+      filePath: string
+      fileName: string
+      relativePath: string
+      rootPath: string
+      matches: Array<{
+        lineNumber: number
+        lineContent: string
+        matchStart: number
+        matchEnd: number
+      }>
+    }>
+    totalMatches: number
+    totalFiles: number
+    hasMore: boolean
+    offset: number
+    limit: number
+    truncated: boolean
+  }> => ipcRenderer.invoke('search:find-in-files', options),
+
+  // Auto / Mandatory Updater APIs
+  checkForUpdates: (): Promise<{
+    success: boolean
+    hasUpdate: boolean
+    currentVersion: string
+    latestVersion: string
+    releaseTitle: string
+    releaseNotes: string
+    publishedAt: string
+    downloadUrl?: string
+    fileName?: string
+    fileSizeBytes?: number
+    htmlUrl?: string
+    errorMessage?: string
+  }> => ipcRenderer.invoke('updater:check-update'),
+
+  downloadUpdate: (downloadUrl: string, targetFileName?: string): Promise<{ success: boolean; filePath?: string; error?: string }> =>
+    ipcRenderer.invoke('updater:download-update', downloadUrl, targetFileName),
+
+  installUpdate: (installerPath: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('updater:install-update', installerPath),
+
+  onUpdateDownloadProgress: (
+    callback: (data: { percent: number; transferredBytes: number; totalBytes: number; speedMbps: number }) => void
+  ): (() => void) => {
+    const listener = (
+      _event: IpcRendererEvent,
+      data: { percent: number; transferredBytes: number; totalBytes: number; speedMbps: number }
+    ): void => callback(data)
+    ipcRenderer.on('updater:download-progress', listener)
+    return (): void => {
+      ipcRenderer.removeListener('updater:download-progress', listener)
+    }
   }
 }
 

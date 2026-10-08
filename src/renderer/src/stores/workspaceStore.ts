@@ -267,6 +267,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const activeTabId = ref<string>('tab-welcome')
   const isCommandPaletteVisible = ref<boolean>(false)
   const isQuickOpenVisible = ref<boolean>(false)
+  const isGlobalSearchVisible = ref<boolean>(false)
+  const globalSearchInitialQuery = ref<string>('')
   const isWindowSwitcherVisible = ref<boolean>(false)
   const isTabSwitcherVisible = ref<boolean>(false)
   const mruTabIds = ref<string[]>(['tab-welcome'])
@@ -292,6 +294,36 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 
   function setBottomPanelHeight(height: number): void {
     bottomPanelHeight.value = Math.max(120, Math.min(height, window.innerHeight * 0.85))
+  }
+
+  function toggleGlobalSearch(initialQuery?: string): void {
+    if (initialQuery !== undefined) {
+      globalSearchInitialQuery.value = initialQuery
+    } else {
+      const activeEd = getActiveEditorInstance()
+      if (activeEd) {
+        const sel = activeEd.getSelection()
+        const model = activeEd.getModel()
+        if (sel && model && !sel.isEmpty()) {
+          const selectedText = model.getValueInRange(sel).trim()
+          if (selectedText && selectedText.length < 100) {
+            globalSearchInitialQuery.value = selectedText
+          }
+        }
+      }
+    }
+    isGlobalSearchVisible.value = !isGlobalSearchVisible.value
+  }
+
+  function openGlobalSearch(initialQuery?: string): void {
+    if (initialQuery !== undefined) {
+      globalSearchInitialQuery.value = initialQuery
+    }
+    isGlobalSearchVisible.value = true
+  }
+
+  function closeGlobalSearch(): void {
+    isGlobalSearchVisible.value = false
   }
 
   function recordRecentFile(filePath: string, fileName: string): void {
@@ -1283,6 +1315,11 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     openAboutModal,
     isCommandPaletteVisible,
     toggleCommandPalette,
+    isGlobalSearchVisible,
+    globalSearchInitialQuery,
+    toggleGlobalSearch,
+    openGlobalSearch,
+    closeGlobalSearch,
     toggleCopilotPanel,
     toggleOpenCodePanel,
     toggleClaudePanel,

@@ -2,7 +2,7 @@
 <html lang="id">
 <head>
   <meta charset="UTF-8">
-  <title>Memuat Makarya Code Editor...</title>
+  <title>Memuat Makarya IDE...</title>
   <style>
     * {
       box-sizing: border-box;
@@ -168,8 +168,8 @@
         <span class="progress-percent" id="progress-percent">0%</span>
       </div>
 
-      <div class="version-badge">
-        v0.1.0 • 64-bit
+      <div class="version-badge" id="version-badge">
+        v2026.10.08.22.50 • 64-bit
       </div>
     </div>
   </div>
@@ -180,6 +180,27 @@
     const progressPercent = document.getElementById('progress-percent');
     const statusLabel = document.getElementById('status-label');
     const splashContainer = document.getElementById('splash-container');
+    const versionBadge = document.getElementById('version-badge');
+
+    // Dynamically resolve build version with date, hour, minute
+    try {
+      const urlParams = new URLSearchParams(window.location.search);
+      let v = urlParams.get('v');
+      if (!v) {
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
+        const hours = String(now.getHours()).padStart(2, '0');
+        const minutes = String(now.getMinutes()).padStart(2, '0');
+        v = `v${year}.${month}.${day}.${hours}.${minutes}`;
+      }
+      if (versionBadge) {
+        versionBadge.textContent = `${v} • 64-bit`;
+      }
+    } catch (e) {
+      console.error(e);
+    }
 
     const stages = [
       { at: 0.00, text: 'Memulai sistem Makarya IDE...' },

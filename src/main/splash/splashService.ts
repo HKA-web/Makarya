@@ -44,7 +44,8 @@ export function createSplashScreen(durationMs = 10000, onComplete?: () => void):
   })
 
   const splashHtml = getSplashHtmlPath()
-  splash.loadFile(splashHtml)
+  const versionParam = typeof __APP_BUILD_DATE__ !== 'undefined' ? __APP_BUILD_DATE__ : ''
+  splash.loadFile(splashHtml, { query: { v: versionParam } })
 
   splash.once('ready-to-show', () => {
     splash.show()

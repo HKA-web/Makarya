@@ -1,8 +1,9 @@
 import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
-import { join, basename, parse, relative, dirname } from 'node:path'
+import { join, basename, parse, relative, dirname, resolve } from 'node:path'
 import { existsSync } from 'node:fs'
 import { readdir, readFile, writeFile, stat, mkdir, rename, rm, cp } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
+import { createInterface } from 'node:readline'
 import * as net from 'node:net'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 // Mesin AI Agent bertenaga Vercel AI SDK (Universal Provider, Auto Loop, Zod Validation)
@@ -14,7 +15,9 @@ import { uiBuilderService } from './agent/uiBuilderService'
 import { databaseService } from './db/databaseService'
 import { liveDatabaseDriverService } from './db/liveDbDriver'
 import { terminalService } from './terminal/terminalService'
+import { searchService, getRipgrepBinaryPath } from './search/searchService'
 import { createSplashScreen } from './splash/splashService'
+import { updateService } from './updater/updateService'
 
 let primaryWindow: BrowserWindow | null = null
 const activeBrowserWindows = new Set<BrowserWindow>()
@@ -77,6 +80,103 @@ const IGNORED_INDEX_FOLDERS = new Set([
   'bin',
   'obj'
 ])
+
+const workspaceFilesCache = new Map<string, { timestamp: number; files: WorkspaceFileItem[] }>()
+
+async function collectWorkspaceFilesWithRipgrep(rootPath: string, maxFiles = 50000): Promise<WorkspaceFileItem[]> {
+  const cached = workspaceFilesCache.get(rootPath)
+  const now = Date.now()
+  // 15 seconds memory cache for instant Ctrl+E file opening
+  if (cached && now - cached.timestamp < 15000) {
+    return cached.files
+  }
+
+  const rgBin = getRipgrepBinaryPath()
+  if (!rgBin || !existsSync(rgBin)) {
+    const fallback = await collectWorkspaceFiles(rootPath, rootPath, maxFiles)
+    workspaceFilesCache.set(rootPath, { timestamp: now, files: fallback })
+    return fallback
+  }
+
+  return new Promise((resolveResult) => {
+    const args = [
+      '--files',
+      '--no-messages',
+      '-g', '!**/node_modules/**',
+      '-g', '!**/.git/**',
+      '-g', '!**/.svn/**',
+      '-g', '!**/.hg/**',
+      '-g', '!**/dist/**',
+      '-g', '!**/build/**',
+      '-g', '!**/out/**',
+      '-g', '!**/.output/**',
+      '-g', '!**/.next/**',
+      '-g', '!**/.nuxt/**',
+      '-g', '!**/vendor/**',
+      '-g', '!**/coverage/**',
+      '-g', '!**/.cache/**',
+      '-g', '!**/cache/**',
+      '-g', '!**/.idea/**',
+      '-g', '!**/.vscode/**',
+      '-g', '!**/tmp/**',
+      '-g', '!**/temp/**',
+      '-g', '!**/uploads/**',
+      '-g', '!**/upload/**',
+      '-g', '!**/storage/logs/**',
+      '-g', '!**/storage/framework/**',
+      rootPath
+    ]
+
+    const child = spawn(rgBin, args, { windowsHide: true })
+    const items: WorkspaceFileItem[] = []
+    let isResolved = false
+
+    const finish = (): void => {
+      if (isResolved) return
+      isResolved = true
+      if (!child.killed) {
+        try { child.kill() } catch {}
+      }
+      workspaceFilesCache.set(rootPath, { timestamp: Date.now(), files: items })
+      resolveResult(items)
+    }
+
+    if (!child.stdout) {
+      finish()
+      return
+    }
+
+    const rl = createInterface({
+      input: child.stdout,
+      crlfDelay: Infinity
+    })
+
+    rl.on('line', (line) => {
+      if (isResolved || !line.trim()) return
+      const fullPath = resolve(line.trim())
+      const rel = relative(rootPath, fullPath).replace(/\\/g, '/')
+      items.push({
+        name: basename(fullPath),
+        path: fullPath,
+        relativePath: rel,
+        rootPath
+      })
+      if (items.length >= maxFiles) {
+        finish()
+      }
+    })
+
+    child.on('close', finish)
+    child.on('error', () => {
+      collectWorkspaceFiles(rootPath, rootPath, maxFiles)
+        .then((res) => {
+          workspaceFilesCache.set(rootPath, { timestamp: Date.now(), files: res })
+          resolveResult(res)
+        })
+        .catch(() => resolveResult([]))
+    })
+  })
+}
 
 async function collectWorkspaceFiles(
   directoryPath: string,
@@ -157,7 +257,7 @@ function createPrimaryWindow(
     show: false,
     frame: false,
     autoHideMenuBar: true,
-    title: mode === 'blank-app' ? 'Makarya App Workspace' : 'Makarya Code Editor',
+    title: mode === 'blank-app' ? 'Makarya IDE Workspace' : 'Makarya IDE',
     icon: existsSync(join(__dirname, '../../build/icon.png'))
       ? join(__dirname, '../../build/icon.png')
       : join(__dirname, '../../build/icon.ico'),
@@ -644,13 +744,13 @@ function registerIpcHandlers(): void {
     }
   })
 
-  // Fast Workspace Files Indexer for Quick Open (Ctrl+E)
+  // Fast Workspace Files Indexer for Quick Open (Ctrl+E) powered by Native Ripgrep
   ipcMain.handle('fs:search-workspace-files', async (_event, rootPaths: string[]) => {
     try {
       const allFiles: WorkspaceFileItem[] = []
       for (const root of rootPaths) {
         if (existsSync(root)) {
-          const files = await collectWorkspaceFiles(root, root, 50000)
+          const files = await collectWorkspaceFilesWithRipgrep(root, 50000)
           allFiles.push(...files)
         }
       }
@@ -776,6 +876,11 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('claude:session-delete', async (_event, sessionId: string) => {
     return claudeCliService.deleteSession(sessionId)
+  })
+
+  // Global Text & Code Search (Find in Files)
+  ipcMain.handle('search:find-in-files', async (_event, options) => {
+    return searchService.findInFiles(options)
   })
 
   // Git / Source Control Handlers
@@ -944,10 +1049,25 @@ function registerIpcHandlers(): void {
     return databaseService.executeQuery(sql, params)
   })
 
+  // --- Auto / Mandatory Updater Handlers ---
+  ipcMain.handle('updater:check-update', async () => {
+    return updateService.checkForUpdates()
+  })
+
+  ipcMain.handle('updater:download-update', async (event, downloadUrl: string, targetFileName?: string) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    return updateService.downloadUpdate(downloadUrl, targetFileName, win)
+  })
+
+  ipcMain.handle('updater:install-update', async (_event, installerPath: string) => {
+    return updateService.installAndRestart(installerPath)
+  })
 }
 
+app.setName('Makarya IDE')
+
 app.whenReady().then(async () => {
-  electronApp.setAppUserModelId('com.makarya.workspace')
+  electronApp.setAppUserModelId('com.makarya.ide')
 
   // Inisialisasi Database SQLite Utama Makarya IDE
   try {

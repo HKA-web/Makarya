@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, provide } from 'vue'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
@@ -9,7 +9,7 @@ import type { FileEntry } from '../../../preload/index'
 import FileTreeNode from './FileTreeNode.vue'
 import { useWorkspaceStore } from '@renderer/stores/workspaceStore'
 import { useAgentStore } from '@renderer/stores/agentStore'
-import { getFileIconClass } from '@renderer/utils/languageDetector'
+import { getFileIconClass, getNuxtFileIcon } from '@renderer/utils/languageDetector'
 
 const workspaceStore = useWorkspaceStore()
 const agentStore = useAgentStore()
@@ -17,6 +17,47 @@ const confirm = useConfirm()
 const toast = useToast()
 
 const isOpening = ref(false)
+
+// Floating Dark Glassmorphism Tooltip for Explorer items
+const hoverTooltip = ref<{ entry: FileEntry; x: number; y: number } | null>(null)
+let fileHoverTimer: ReturnType<typeof setTimeout> | null = null
+
+function showFileTooltip(entry: FileEntry, el: HTMLElement): void {
+  if (fileHoverTimer) clearTimeout(fileHoverTimer)
+  fileHoverTimer = setTimeout(() => {
+    const rect = el.getBoundingClientRect()
+    // Position to the right of the sidebar, safely constrained
+    const x = Math.min(rect.right + 10, window.innerWidth - 320)
+    const y = Math.max(10, Math.min(rect.top - 4, window.innerHeight - 90))
+    hoverTooltip.value = { entry, x, y }
+  }, 180)
+}
+
+function hideFileTooltip(): void {
+  if (fileHoverTimer) {
+    clearTimeout(fileHoverTimer)
+    fileHoverTimer = null
+  }
+  hoverTooltip.value = null
+}
+
+provide('showFileTooltip', showFileTooltip)
+provide('hideFileTooltip', hideFileTooltip)
+
+function getEntryProjectName(entryPath: string): string {
+  const normPath = entryPath.replace(/\\/g, '/').toLowerCase()
+  const matchingRoot = workspaceStore.workspaceRoots.find((r) => {
+    const normRoot = r.path.replace(/\\/g, '/').toLowerCase()
+    return normPath === normRoot || normPath.startsWith(normRoot + '/')
+  })
+  return matchingRoot ? matchingRoot.name : ''
+}
+
+function getEntryBadge(entry: FileEntry): string {
+  if (entry.isDirectory) return 'FOLDER'
+  const ext = entry.name.split('.').pop()
+  return ext && ext !== entry.name ? ext.toUpperCase() : 'FILE'
+}
 
 // Dynamic Resizable Sidebar Width
 const sidebarWidth = ref<number>(270)
@@ -474,10 +515,14 @@ async function handlePasteEntry(targetFolderPath?: string): Promise<void> {
 
       <!-- Single Project Banner & Tree (When only 1 root) -->
       <template v-if="workspaceStore.workspaceRoots.length === 1">
-        <div class="px-3 py-2 bg-[#0e1626]/80 border-b border-white/[0.06] flex items-center justify-between text-xs font-semibold text-slate-200 group">
+        <div
+          @mouseenter="showFileTooltip({ name: workspaceStore.workspaceRoots[0].name, path: workspaceStore.workspaceRoots[0].path, isDirectory: true }, $event.currentTarget as HTMLElement)"
+          @mouseleave="hideFileTooltip"
+          class="px-3 py-2 bg-[#0e1626]/80 border-b border-white/[0.06] flex items-center justify-between text-xs font-semibold text-slate-200 group cursor-default"
+        >
           <div class="flex items-center gap-2 truncate">
             <UIcon name="i-lucide-folder-open" class="size-4 text-[#42b883] flex-shrink-0" />
-            <span class="truncate font-mono text-[11px]" :title="workspaceStore.workspaceRoots[0].path">
+            <span class="truncate font-mono text-[11px]">
               {{ workspaceStore.workspaceRoots[0].name }}
             </span>
           </div>
@@ -541,6 +586,8 @@ async function handlePasteEntry(targetFolderPath?: string): Promise<void> {
           <div
             @click="workspaceStore.toggleRootExpanded(root.path); workspaceStore.activeRootPath = root.path"
             @contextmenu.prevent="handleRootContextMenu($event, root)"
+            @mouseenter="showFileTooltip({ name: root.name, path: root.path, isDirectory: true }, $event.currentTarget as HTMLElement)"
+            @mouseleave="hideFileTooltip"
             class="px-2.5 py-1.5 bg-[#0a0f19] hover:bg-white/[0.04] flex items-center justify-between text-xs font-bold text-slate-200 cursor-pointer select-none group transition-colors border-y border-white/[0.04]"
             :class="workspaceStore.activeRootPath === root.path ? 'border-l-2 border-l-[#42b883] bg-[#42b883]/5' : ''"
           >
@@ -553,7 +600,7 @@ async function handlePasteEntry(targetFolderPath?: string): Promise<void> {
                 :name="root.isExpanded ? 'i-lucide-folder-open' : 'i-lucide-folder'"
                 class="size-3.5 text-[#42b883] flex-shrink-0"
               />
-              <span class="truncate font-mono text-[11px] uppercase tracking-wider text-slate-100" :title="root.path">
+              <span class="truncate font-mono text-[11px] uppercase tracking-wider text-slate-100">
                 {{ root.name }}
               </span>
             </div>
@@ -866,5 +913,60 @@ async function handlePasteEntry(targetFolderPath?: string): Promise<void> {
         </div>
       </div>
     </Dialog>
+
+    <!-- Dark Glassmorphism Nuxt UI Style Tooltip for File Explorer Entries -->
+    <Teleport to="body">
+      <Transition
+        enter-active-class="transition duration-150 ease-out"
+        enter-from-class="opacity-0 translate-x-1 scale-95"
+        enter-to-class="opacity-100 translate-x-0 scale-100"
+        leave-active-class="transition duration-100 ease-in"
+        leave-from-class="opacity-100 translate-x-0 scale-100"
+        leave-to-class="opacity-0 translate-x-1 scale-95"
+      >
+        <div
+          v-if="hoverTooltip && hoverTooltip.entry"
+          class="fixed z-[9999] pointer-events-none px-3 py-2 rounded-xl bg-[#090e17]/95 backdrop-blur-2xl border border-white/[0.14] shadow-[0_15px_35px_-5px_rgba(0,0,0,0.8)] flex flex-col gap-1.5 min-w-[260px] max-w-md ring-1 ring-white/[0.08]"
+          :style="{
+            left: `${hoverTooltip.x}px`,
+            top: `${hoverTooltip.y}px`
+          }"
+        >
+          <!-- Header: File Name + Type Badge & Project Badge -->
+          <div class="flex items-center justify-between gap-3">
+            <div class="flex items-center gap-1.5 min-w-0">
+              <UIcon
+                :name="getNuxtFileIcon(hoverTooltip.entry.name, hoverTooltip.entry.isDirectory).icon"
+                :class="[getNuxtFileIcon(hoverTooltip.entry.name, hoverTooltip.entry.isDirectory).colorClass, 'size-3.5 flex-shrink-0']"
+              />
+              <span class="text-xs font-semibold text-white font-mono truncate">{{ hoverTooltip.entry.name }}</span>
+            </div>
+
+            <div class="flex items-center gap-1.5 flex-shrink-0">
+              <!-- Type / Extension Badge -->
+              <span
+                class="text-[9px] font-bold px-1.5 py-0.2 rounded border font-mono uppercase tracking-wider"
+                :class="hoverTooltip.entry.isDirectory ? 'bg-amber-500/15 text-amber-300 border-amber-500/30' : 'bg-slate-500/15 text-slate-300 border-slate-500/30'"
+              >
+                {{ getEntryBadge(hoverTooltip.entry) }}
+              </span>
+
+              <!-- Project Name Badge -->
+              <span
+                v-if="getEntryProjectName(hoverTooltip.entry.path)"
+                class="px-1.5 py-0.2 rounded-md bg-[#42b883]/15 border border-[#42b883]/30 text-[#42b883] font-mono text-[9px] font-bold uppercase tracking-wider"
+              >
+                {{ getEntryProjectName(hoverTooltip.entry.path) }}
+              </span>
+            </div>
+          </div>
+
+          <!-- Full File Path -->
+          <div class="text-[10.5px] text-slate-400 font-mono break-all leading-tight select-none border-t border-white/[0.06] pt-1">
+            {{ hoverTooltip.entry.path }}
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>

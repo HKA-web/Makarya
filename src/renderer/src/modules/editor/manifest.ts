@@ -2,7 +2,7 @@ import type { ModuleManifest } from '../core/types'
 
 export const manifest: ModuleManifest = {
   id: 'editor',
-  name: 'Makarya Code Editor',
+  name: 'Code Editor',
   version: '1.0.0',
   author: 'Makarya Engineering Team',
   description: 'Editor kode Monaco lengkap terintegrasi File Explorer, Tab Workspace, dan Terminal',
