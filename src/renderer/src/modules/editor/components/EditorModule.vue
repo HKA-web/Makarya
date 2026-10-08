@@ -146,6 +146,54 @@ function handleTabMouseLeave(): void {
   hoverTooltip.value = null
 }
 
+// Sleek Dark Floating Action Tooltip for all UI Buttons & Controls
+interface ActionTooltipData {
+  text: string
+  kbd?: string
+  x: number
+  y: number
+  side: 'bottom' | 'right' | 'left' | 'top'
+}
+
+const actionTooltip = ref<ActionTooltipData | null>(null)
+let actionTooltipTimer: ReturnType<typeof setTimeout> | null = null
+
+function showActionTooltip(event: MouseEvent, text: string, kbd?: string, side: 'bottom' | 'right' | 'left' | 'top' = 'bottom'): void {
+  if (actionTooltipTimer) clearTimeout(actionTooltipTimer)
+  const target = event.currentTarget as HTMLElement
+  if (!target) return
+
+  actionTooltipTimer = setTimeout(() => {
+    const rect = target.getBoundingClientRect()
+    let x = 0
+    let y = 0
+
+    if (side === 'bottom') {
+      x = rect.left + rect.width / 2
+      y = rect.bottom + 8
+    } else if (side === 'right') {
+      x = rect.right + 10
+      y = rect.top + rect.height / 2
+    } else if (side === 'top') {
+      x = rect.left + rect.width / 2
+      y = rect.top - 8
+    } else if (side === 'left') {
+      x = rect.left - 10
+      y = rect.top + rect.height / 2
+    }
+
+    actionTooltip.value = { text, kbd, x, y, side }
+  }, 100)
+}
+
+function hideActionTooltip(): void {
+  if (actionTooltipTimer) {
+    clearTimeout(actionTooltipTimer)
+    actionTooltipTimer = null
+  }
+  actionTooltip.value = null
+}
+
 function handleCloseOtherTabs(): void {
   if (typeof workspaceStore.closeOtherTabs === 'function') {
     workspaceStore.closeOtherTabs(workspaceStore.activeTabId)
@@ -349,9 +397,10 @@ onUnmounted(() => {
           <div class="flex items-center gap-1.5">
             <span class="px-1.5 py-0.2 rounded-full text-[9px] text-[#42b883] bg-[#42b883]/10 border border-[#42b883]/20 font-mono font-medium">Ctrl+E</span>
             <span
-              @click.stop="workspaceStore.toggleCommandPalette"
-              class="px-1.5 py-0.2 rounded-full text-[9px] text-slate-400 hover:text-white bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] font-mono font-medium transition-colors"
-              title="Buka Command Palette (Ctrl+K)"
+              @click.stop="hideActionTooltip(); workspaceStore.toggleCommandPalette()"
+              @mouseenter="showActionTooltip($event, 'Buka Command Palette', 'Ctrl+K', 'bottom')"
+              @mouseleave="hideActionTooltip"
+              class="px-1.5 py-0.2 rounded-full text-[9px] text-slate-400 hover:text-white bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] font-mono font-medium transition-colors cursor-pointer"
             >
               Ctrl+K
             </span>
@@ -364,12 +413,13 @@ onUnmounted(() => {
         <div class="flex items-center gap-0.5 bg-white/[0.03] p-0.5 rounded-lg border border-white/[0.08]">
           <!-- 1. Toggle Sidebar Kiri -->
           <button
-            @click="workspaceStore.toggleSidebar"
+            @click="hideActionTooltip(); workspaceStore.toggleSidebar()"
+            @mouseenter="showActionTooltip($event, 'Toggle Sidebar Kiri (Pohon Berkas)', undefined, 'bottom')"
+            @mouseleave="hideActionTooltip"
             class="w-6.5 h-6.5 rounded-md flex items-center justify-center transition-all cursor-pointer"
             :class="workspaceStore.isSidebarOpen
               ? 'bg-white/[0.1] text-slate-100 shadow-xs'
               : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04]'"
-            title="Toggle Sidebar Kiri (Pohon Berkas)"
           >
             <svg viewBox="0 0 16 16" fill="none" class="size-3.5" xmlns="http://www.w3.org/2000/svg">
               <rect x="2" y="2" width="12" height="12" rx="1.5" stroke="currentColor" stroke-width="1.2" />
@@ -380,12 +430,13 @@ onUnmounted(() => {
 
           <!-- 2. Toggle Panel Terminal Bawah -->
           <button
-            @click="workspaceStore.toggleBottomPanel"
+            @click="hideActionTooltip(); workspaceStore.toggleBottomPanel()"
+            @mouseenter="showActionTooltip($event, 'Toggle Panel Terminal Bawah', 'Ctrl+`', 'bottom')"
+            @mouseleave="hideActionTooltip"
             class="w-6.5 h-6.5 rounded-md flex items-center justify-center transition-all cursor-pointer"
             :class="workspaceStore.isBottomPanelOpen
               ? 'bg-white/[0.1] text-slate-100 shadow-xs'
               : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04]'"
-            title="Toggle Panel Terminal Bawah (Ctrl+`)"
           >
             <svg viewBox="0 0 16 16" fill="none" class="size-3.5" xmlns="http://www.w3.org/2000/svg">
               <rect x="2" y="2" width="12" height="12" rx="1.5" stroke="currentColor" stroke-width="1.2" />
@@ -397,16 +448,18 @@ onUnmounted(() => {
           <!-- 3. Toggle Panel Source Control Kanan (Top-Right Button) -->
           <button
             @click="
+              hideActionTooltip();
               workspaceStore.toggleSourceControlPanel();
               if (workspaceStore.isSourceControlPanelOpen) {
                 gitStore.refreshStatus();
               }
             "
+            @mouseenter="showActionTooltip($event, 'Toggle Source Control (Git Changes & Commit)', undefined, 'bottom')"
+            @mouseleave="hideActionTooltip"
             class="w-6.5 h-6.5 rounded-md flex items-center justify-center transition-all cursor-pointer relative"
             :class="workspaceStore.isSourceControlPanelOpen
               ? 'bg-white/[0.12] text-slate-100 shadow-xs border border-white/[0.08]'
               : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04]'"
-            title="Toggle Source Control (Git Changes & Commit)"
           >
             <svg viewBox="0 0 16 16" fill="none" class="size-3.5" xmlns="http://www.w3.org/2000/svg">
               <rect x="2" y="2" width="12" height="12" rx="1.5" stroke="currentColor" stroke-width="1.2" />
@@ -430,6 +483,7 @@ onUnmounted(() => {
         <!-- File Explorer Tab Button -->
         <button
           @click="
+            hideActionTooltip();
             if (workspaceStore.isSidebarOpen && workspaceStore.activeSidebarTab === 'explorer') {
               workspaceStore.isSidebarOpen = false;
             } else {
@@ -437,68 +491,74 @@ onUnmounted(() => {
               workspaceStore.isSidebarOpen = true;
             }
           "
+          @mouseenter="showActionTooltip($event, 'File Explorer (Pohon Berkas)', undefined, 'right')"
+          @mouseleave="hideActionTooltip"
           class="w-7.5 h-7.5 rounded-xl flex items-center justify-center transition-all duration-200 cursor-pointer relative"
           :class="workspaceStore.isSidebarOpen && workspaceStore.activeSidebarTab === 'explorer'
             ? 'bg-[#42b883]/15 text-[#42b883] border border-[#42b883]/30 shadow-xs shadow-[#42b883]/20'
             : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04] border border-transparent'"
-          title="File Explorer (Pohon Berkas)"
         >
           <UIcon name="i-lucide-folder" class="size-4" />
         </button>
 
         <!-- Quick Open File Search Button (Ctrl+E) -->
         <button
-          @click="workspaceStore.toggleQuickOpen"
+          @click="hideActionTooltip(); workspaceStore.toggleQuickOpen()"
+          @mouseenter="showActionTooltip($event, 'Pencarian Berkas Project', 'Ctrl+E', 'right')"
+          @mouseleave="hideActionTooltip"
           class="w-7.5 h-7.5 rounded-xl flex items-center justify-center text-slate-400 hover:text-slate-200 hover:bg-white/[0.04] border border-transparent hover:border-white/[0.06] transition-all duration-200 cursor-pointer"
-          title="Pencarian Berkas Project (Ctrl+E)"
         >
           <UIcon name="i-lucide-search" class="size-4" />
         </button>
 
         <!-- Task View & Multi-Window Hub Button (Ctrl+Shift+N) -->
         <button
-          @click="workspaceStore.toggleWindowSwitcher"
+          @click="hideActionTooltip(); workspaceStore.toggleWindowSwitcher()"
+          @mouseenter="showActionTooltip($event, 'Task View & Multi-Window Hub', 'Ctrl+Shift+N', 'right')"
+          @mouseleave="hideActionTooltip"
           class="w-7.5 h-7.5 rounded-xl flex items-center justify-center transition-all duration-200 cursor-pointer relative"
           :class="workspaceStore.isWindowSwitcherVisible
             ? 'bg-[#42b883]/20 text-[#42b883] border border-[#42b883]/40 shadow-xs shadow-[#42b883]/20'
             : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04] border border-transparent hover:border-white/[0.06]'"
-          title="Task View & Multi-Window Hub (Ctrl+Shift+N)"
         >
           <UIcon name="i-lucide-layout-grid" class="size-4" />
         </button>
 
         <!-- Extensions & Plugins Manager (Ctrl+Shift+X) -->
         <button
-          @click="pluginStore.isPluginManagerOpen = true"
+          @click="hideActionTooltip(); pluginStore.isPluginManagerOpen = true"
+          @mouseenter="showActionTooltip($event, 'Ekstensi & Plugin', 'Ctrl+Shift+X', 'right')"
+          @mouseleave="hideActionTooltip"
           class="w-7.5 h-7.5 rounded-xl flex items-center justify-center transition-all duration-200 cursor-pointer relative"
           :class="pluginStore.isPluginManagerOpen
             ? 'bg-[#42b883]/20 text-[#42b883] border border-[#42b883]/40 shadow-xs shadow-[#42b883]/20'
             : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04] border border-transparent hover:border-white/[0.06]'"
-          title="Ekstensi & Plugin (Ctrl+Shift+X)"
         >
           <UIcon name="i-lucide-puzzle" class="size-4" />
         </button>
 
         <!-- OpenCode Autonomous Agent (CLI) -->
         <button
-          @click="workspaceStore.toggleOpenCodePanel()"
+          @click="hideActionTooltip(); workspaceStore.toggleOpenCodePanel()"
+          @mouseenter="showActionTooltip($event, 'OpenCode Autonomous Agent', undefined, 'right')"
+          @mouseleave="hideActionTooltip"
           class="w-7.5 h-7.5 rounded-xl flex items-center justify-center transition-all duration-200 cursor-pointer relative"
           :class="workspaceStore.isOpenCodePanelOpen
             ? 'bg-[#42b883]/20 text-[#42b883] border border-[#42b883]/40 shadow-xs shadow-[#42b883]/20'
             : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04] border border-transparent hover:border-white/[0.06]'"
-          title="OpenCode Agent"
         >
           <img :src="openCodeLogo" alt="OpenCode" class="size-4 rounded-xs object-contain" />
         </button>
 
         <!-- Claude Autonomous Agent (CLI) -->
         <button
-          @click="workspaceStore.toggleClaudePanel()"
+          @click="hideActionTooltip(); workspaceStore.toggleClaudePanel()"
+          @mouseenter="showActionTooltip($event, 'Claude Code Agent', undefined, 'right')"
+          @mouseleave="hideActionTooltip"
           class="w-7.5 h-7.5 rounded-xl flex items-center justify-center transition-all duration-200 cursor-pointer relative"
           :class="workspaceStore.isClaudePanelOpen
             ? 'bg-[#ea580c]/20 text-[#f97316] border border-[#ea580c]/40 shadow-xs shadow-[#ea580c]/20'
             : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04] border border-transparent hover:border-white/[0.06]'"
-          title="Claude Code Agent"
         >
           <img :src="claudeLogo" alt="Claude" class="size-4 rounded-xs object-contain" />
         </button>
@@ -507,9 +567,10 @@ onUnmounted(() => {
 
         <!-- Sidebar Collapse / Expand Toggle Button -->
         <button
-          @click="workspaceStore.toggleSidebar"
+          @click="hideActionTooltip(); workspaceStore.toggleSidebar()"
+          @mouseenter="showActionTooltip($event, workspaceStore.isSidebarOpen ? 'Tutup Sidebar' : 'Buka Sidebar', undefined, 'right')"
+          @mouseleave="hideActionTooltip"
           class="w-7.5 h-7.5 rounded-xl flex items-center justify-center text-slate-500 hover:text-slate-300 hover:bg-white/[0.04] border border-transparent hover:border-white/[0.06] transition-all duration-200 cursor-pointer"
-          :title="workspaceStore.isSidebarOpen ? 'Tutup Sidebar' : 'Buka Sidebar'"
         >
           <UIcon :name="workspaceStore.isSidebarOpen ? 'i-lucide-panel-left-close' : 'i-lucide-panel-left-open'" class="size-4" />
         </button>
@@ -556,16 +617,18 @@ onUnmounted(() => {
               </div>
               <span
                 v-if="tab.isDirty"
+                @mouseenter="showActionTooltip($event, 'Perubahan belum disimpan', 'Ctrl+S', 'bottom')"
+                @mouseleave="hideActionTooltip"
                 class="w-1.5 h-1.5 rounded-full bg-amber-400 shadow-sm shadow-amber-400/50 ml-0.5 flex-shrink-0"
-                title="Perubahan belum disimpan (Ctrl+S)"
               ></span>
               <button
-                @click.stop="workspaceStore.closeTab(tab.id)"
+                @click.stop="hideActionTooltip(); workspaceStore.closeTab(tab.id)"
+                @mouseenter="showActionTooltip($event, 'Tutup tab', undefined, 'bottom')"
+                @mouseleave="hideActionTooltip"
                 class="w-4 h-4 rounded-full flex items-center justify-center ml-0.5 cursor-pointer flex-shrink-0 transition-colors opacity-60 group-hover:opacity-100 hover:opacity-100"
                 :class="workspaceStore.activeTabId === tab.id
                   ? 'text-slate-300 hover:text-rose-400 hover:bg-rose-500/20'
                   : 'text-slate-400 hover:text-rose-400 hover:bg-white/[0.08]'"
-                title="Tutup tab"
               >
                 <UIcon name="i-lucide-x" class="size-2.5" />
               </button>
@@ -575,17 +638,19 @@ onUnmounted(() => {
           <!-- Tab Bar Right Quick Actions (Close All, Close Others) -->
           <div v-if="workspaceStore.tabList.length > 1" class="flex items-center gap-1 pl-1 flex-shrink-0 border-l border-white/[0.06]">
             <button
-              @click="handleCloseOtherTabs"
+              @click="hideActionTooltip(); handleCloseOtherTabs()"
+              @mouseenter="showActionTooltip($event, 'Tutup Tab Lainnya', undefined, 'bottom')"
+              @mouseleave="hideActionTooltip"
               class="h-6 px-2.5 rounded-full text-[10px] text-slate-400 hover:text-white hover:bg-white/[0.06] border border-white/[0.04] hover:border-white/[0.08] transition-colors cursor-pointer flex items-center gap-1"
-              title="Tutup Tab Lainnya"
             >
               <UIcon name="i-lucide-x-circle" class="size-3" />
               <span>Tutup Lainnya</span>
             </button>
             <button
-              @click="handleCloseAllTabs"
+              @click="hideActionTooltip(); handleCloseAllTabs()"
+              @mouseenter="showActionTooltip($event, 'Tutup Semua Tab', undefined, 'bottom')"
+              @mouseleave="hideActionTooltip"
               class="h-6 w-6 rounded-full flex items-center justify-center text-slate-400 hover:text-rose-400 hover:bg-rose-500/15 border border-white/[0.04] hover:border-rose-500/30 transition-colors cursor-pointer"
-              title="Tutup Semua Tab"
             >
               <UIcon name="i-lucide-x" class="size-3.5" />
             </button>
@@ -701,6 +766,41 @@ onUnmounted(() => {
           <div class="text-[10.5px] text-slate-400 font-mono break-all leading-tight select-none">
             {{ hoverTooltip.tab.filePath }}
           </div>
+        </div>
+      </Transition>
+    </Teleport>
+
+    <!-- Dark Glassmorphic Action Tooltip for Buttons & Controls -->
+    <Teleport to="body">
+      <Transition
+        enter-active-class="transition duration-150 ease-out"
+        enter-from-class="opacity-0 scale-95"
+        enter-to-class="opacity-100 scale-100"
+        leave-active-class="transition duration-100 ease-in"
+        leave-from-class="opacity-100 scale-100"
+        leave-to-class="opacity-0 scale-95"
+      >
+        <div
+          v-if="actionTooltip"
+          class="fixed z-[99999] pointer-events-none px-2.5 py-1 rounded-xl bg-[#0b101b]/98 backdrop-blur-2xl border border-white/[0.14] shadow-[0_12px_30px_rgba(0,0,0,0.85)] flex items-center gap-2 select-none"
+          :class="[
+            actionTooltip.side === 'bottom' ? '-translate-x-1/2' : '',
+            actionTooltip.side === 'top' ? '-translate-x-1/2 -translate-y-full' : '',
+            actionTooltip.side === 'right' ? '-translate-y-1/2' : '',
+            actionTooltip.side === 'left' ? '-translate-x-full -translate-y-1/2' : ''
+          ]"
+          :style="{
+            left: `${actionTooltip.x}px`,
+            top: `${actionTooltip.y}px`
+          }"
+        >
+          <span class="text-[11.5px] font-semibold text-slate-200 whitespace-nowrap">{{ actionTooltip.text }}</span>
+          <span
+            v-if="actionTooltip.kbd"
+            class="px-1.5 py-0.2 rounded-md bg-white/[0.08] border border-white/[0.12] text-[9.5px] font-mono text-[#42b883] font-bold uppercase tracking-wider shadow-xs"
+          >
+            {{ actionTooltip.kbd }}
+          </span>
         </div>
       </Transition>
     </Teleport>

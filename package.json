@@ -1,15 +1,15 @@
 {
   "name": "makarya-ide",
   "productName": "Makarya IDE",
-  "version": "2.0.0",
+  "version": "2026.10.08.23.59",
   "description": "Makarya IDE",
   "main": "./out/main/index.js",
   "author": "Makarya",
   "scripts": {
     "dev": "electron-vite dev",
-    "build": "vue-tsc --noEmit && electron-vite build && node scripts/copy-splash.js",
+    "build": "node scripts/sync-version.js && vue-tsc --noEmit && electron-vite build && node scripts/copy-splash.js",
     "postinstall": "electron-builder install-app-deps",
-    "build:win": "npm run build && electron-builder --win --config electron-builder.yml",
+    "build:win": "node scripts/sync-version.js && npm run build && electron-builder --win --config electron-builder.yml",
     "preview": "electron-vite preview"
   },
   "dependencies": {

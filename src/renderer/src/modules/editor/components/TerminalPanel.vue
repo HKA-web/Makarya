@@ -391,7 +391,6 @@ watch(
                 ? 'bg-[#42b883]/15 text-white border-[#42b883]/35 shadow-[0_0_10px_rgba(66,184,131,0.15)]'
                 : 'bg-white/[0.02] text-slate-400 hover:text-slate-200 hover:bg-white/[0.05] border-white/[0.06]'
             ]"
-            :title="`Shell: ${getShellBadgeName(term.shell)}`"
           >
             <!-- Shell Icon in Vue Green -->
             <UIcon
@@ -411,7 +410,6 @@ watch(
               @click.stop="closeTerminalTab(term.id, $event)"
               class="size-3.5 rounded-full flex items-center justify-center text-slate-400 hover:text-white hover:bg-rose-500/30 transition-all ml-0.5"
               :class="term.id === activeTerminalId ? 'opacity-80 hover:opacity-100' : 'opacity-0 group-hover:opacity-100'"
-              title="Tutup Terminal"
             >
               <UIcon name="i-lucide-x" class="size-2.5" />
             </span>
@@ -422,7 +420,6 @@ watch(
         <button
           class="size-6 rounded-full bg-white/[0.03] hover:bg-[#42b883]/15 text-slate-400 hover:text-[#42b883] border border-white/[0.08] hover:border-[#42b883]/35 transition-all flex items-center justify-center cursor-pointer ml-0.5 shadow-xs"
           @click="createTerminalTab(activeTerminal?.shell || 'powershell')"
-          title="Buka Terminal Baru"
         >
           <UIcon name="i-lucide-plus" class="size-3.5" />
         </button>
@@ -436,7 +433,6 @@ watch(
             class="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold transition-all cursor-pointer"
             :class="activeTerminal.shell === 'powershell' ? 'bg-[#42b883]/25 text-[#42b883] border border-[#42b883]/40 font-bold shadow-xs' : 'text-slate-400 hover:text-slate-200'"
             @click="handleSwitchActiveShell('powershell')"
-            title="Ubah shell aktif ke PowerShell"
           >
             PS
           </button>
@@ -444,7 +440,6 @@ watch(
             class="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold transition-all cursor-pointer"
             :class="activeTerminal.shell === 'cmd' ? 'bg-[#42b883]/25 text-[#42b883] border border-[#42b883]/40 font-bold shadow-xs' : 'text-slate-400 hover:text-slate-200'"
             @click="handleSwitchActiveShell('cmd')"
-            title="Ubah shell aktif ke Command Prompt (cmd)"
           >
             CMD
           </button>
@@ -452,7 +447,6 @@ watch(
             class="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold transition-all cursor-pointer"
             :class="activeTerminal.shell === 'bash' ? 'bg-[#42b883]/25 text-[#42b883] border border-[#42b883]/40 font-bold shadow-xs' : 'text-slate-400 hover:text-slate-200'"
             @click="handleSwitchActiveShell('bash')"
-            title="Ubah shell aktif ke Git Bash"
           >
             BASH
           </button>
@@ -462,7 +456,6 @@ watch(
         <div
           v-if="workspaceStore.rootFolderPath"
           class="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-white/[0.02] border border-white/[0.06] text-[10px] text-slate-300 max-w-[140px] truncate"
-          :title="`Working Dir: ${workspaceStore.rootFolderPath}`"
         >
           <UIcon name="i-lucide-folder" class="size-3 text-[#42b883] flex-shrink-0" />
           <span class="truncate font-mono">{{ workspaceStore.rootFolderPath.split(/[\\/]/).pop() }}</span>
@@ -473,7 +466,6 @@ watch(
           <button
             class="size-6 rounded-full flex items-center justify-center text-slate-400 hover:text-[#42b883] hover:bg-[#42b883]/10 transition-colors cursor-pointer"
             @click="handleClearTerminal"
-            title="Bersihkan Tampilan (Clear)"
           >
             <UIcon name="i-lucide-ban" class="size-3.5" />
           </button>
@@ -481,7 +473,6 @@ watch(
           <button
             class="size-6 rounded-full flex items-center justify-center text-slate-400 hover:text-[#42b883] hover:bg-[#42b883]/10 transition-colors cursor-pointer"
             @click="handleRestartTerminal"
-            title="Mulai Ulang Sesi Terminal (Restart)"
           >
             <UIcon name="i-lucide-rotate-cw" class="size-3.5" />
           </button>
@@ -490,7 +481,6 @@ watch(
             v-if="activeTerminal"
             class="size-6 rounded-full flex items-center justify-center text-slate-400 hover:text-rose-400 hover:bg-rose-500/15 transition-colors cursor-pointer"
             @click="closeTerminalTab(activeTerminal.id)"
-            title="Hapus / Tutup Terminal Ini"
           >
             <UIcon name="i-lucide-trash-2" class="size-3.5" />
           </button>
@@ -500,7 +490,6 @@ watch(
           <button
             class="size-6 rounded-full flex items-center justify-center text-slate-400 hover:text-rose-400 hover:bg-rose-500/20 transition-colors cursor-pointer"
             @click="handleClosePanel"
-            title="Sembunyikan Panel Terminal (Ctrl+`)"
           >
             <UIcon name="i-lucide-x" class="size-3.5" />
           </button>

@@ -422,42 +422,36 @@ async function handlePasteEntry(targetFolderPath?: string): Promise<void> {
           v-if="workspaceStore.hasCopiedEntry"
           @click="handlePasteEntry()"
           class="w-6 h-6 rounded-md flex items-center justify-center text-[#42b883] hover:bg-[#42b883]/15 transition-colors cursor-pointer"
-          :title="`Paste '${workspaceStore.copiedEntry?.name}' ke Root`"
         >
           <UIcon name="i-lucide-clipboard-paste" class="size-3.5" />
         </button>
         <button
           @click="openCreateFileDialog()"
           class="w-6 h-6 rounded-md flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/[0.06] transition-colors cursor-pointer"
-          title="File Baru di Root"
         >
           <UIcon name="i-lucide-file-plus" class="size-3.5" />
         </button>
         <button
           @click="openCreateFolderDialog()"
           class="w-6 h-6 rounded-md flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/[0.06] transition-colors cursor-pointer"
-          title="Folder Baru di Root"
         >
           <UIcon name="i-lucide-folder-plus" class="size-3.5" />
         </button>
         <button
           @click="handleRefresh"
           class="w-6 h-6 rounded-md flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/[0.06] transition-colors cursor-pointer"
-          title="Refresh Semua Project"
         >
           <UIcon name="i-lucide-refresh-cw" class="size-3.5" />
         </button>
         <button
           @click="handleAddWorkspace"
           class="w-6 h-6 rounded-md flex items-center justify-center text-slate-400 hover:text-[#42b883] hover:bg-white/[0.06] transition-colors cursor-pointer"
-          title="Tambah Folder Project (Ctrl+Shift+A)..."
         >
           <UIcon name="i-lucide-folder-git-2" class="size-3.5" />
         </button>
         <button
           @click="handleOpenFolder"
           class="w-6 h-6 rounded-md flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/[0.06] transition-colors cursor-pointer"
-          title="Buka Folder Tunggal (Ganti Project)..."
         >
           <UIcon name="i-lucide-folder-open" class="size-3.5" />
         </button>
@@ -926,43 +920,43 @@ async function handlePasteEntry(targetFolderPath?: string): Promise<void> {
       >
         <div
           v-if="hoverTooltip && hoverTooltip.entry"
-          class="fixed z-[9999] pointer-events-none px-3 py-2 rounded-xl bg-[#090e17]/95 backdrop-blur-2xl border border-white/[0.14] shadow-[0_15px_35px_-5px_rgba(0,0,0,0.8)] flex flex-col gap-1.5 min-w-[260px] max-w-md ring-1 ring-white/[0.08]"
+          class="fixed z-[9999] pointer-events-none px-3.5 py-2.5 rounded-2xl bg-[#0b101b]/98 backdrop-blur-3xl border border-white/[0.14] shadow-[0_20px_50px_rgba(0,0,0,0.85)] flex flex-col min-w-[280px] max-w-lg ring-1 ring-white/[0.08]"
           :style="{
             left: `${hoverTooltip.x}px`,
             top: `${hoverTooltip.y}px`
           }"
         >
-          <!-- Header: File Name + Type Badge & Project Badge -->
+          <!-- Header: File/Folder Icon + Name + Type & Project Badges -->
           <div class="flex items-center justify-between gap-3">
-            <div class="flex items-center gap-1.5 min-w-0">
+            <div class="flex items-center gap-2 min-w-0">
               <UIcon
                 :name="getNuxtFileIcon(hoverTooltip.entry.name, hoverTooltip.entry.isDirectory).icon"
-                :class="[getNuxtFileIcon(hoverTooltip.entry.name, hoverTooltip.entry.isDirectory).colorClass, 'size-3.5 flex-shrink-0']"
+                :class="[getNuxtFileIcon(hoverTooltip.entry.name, hoverTooltip.entry.isDirectory).colorClass, 'size-4 flex-shrink-0']"
               />
-              <span class="text-xs font-semibold text-white font-mono truncate">{{ hoverTooltip.entry.name }}</span>
+              <span class="text-xs font-bold text-white font-mono truncate">{{ hoverTooltip.entry.name }}</span>
             </div>
 
             <div class="flex items-center gap-1.5 flex-shrink-0">
-              <!-- Type / Extension Badge -->
+              <!-- Type / Extension Badge (e.g. FOLDER / PHP / TS) -->
               <span
-                class="text-[9px] font-bold px-1.5 py-0.2 rounded border font-mono uppercase tracking-wider"
-                :class="hoverTooltip.entry.isDirectory ? 'bg-amber-500/15 text-amber-300 border-amber-500/30' : 'bg-slate-500/15 text-slate-300 border-slate-500/30'"
+                class="text-[9.5px] font-bold px-2 py-0.5 rounded-md border font-mono uppercase tracking-wider"
+                :class="hoverTooltip.entry.isDirectory ? 'bg-amber-500/15 text-amber-400 border-amber-500/35' : 'bg-slate-700/40 text-slate-300 border-white/10'"
               >
                 {{ getEntryBadge(hoverTooltip.entry) }}
               </span>
 
-              <!-- Project Name Badge -->
+              <!-- Project Name Badge (e.g. BACKEND.ERP) -->
               <span
                 v-if="getEntryProjectName(hoverTooltip.entry.path)"
-                class="px-1.5 py-0.2 rounded-md bg-[#42b883]/15 border border-[#42b883]/30 text-[#42b883] font-mono text-[9px] font-bold uppercase tracking-wider"
+                class="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/35 text-emerald-400 font-mono text-[9.5px] font-bold uppercase tracking-wider"
               >
                 {{ getEntryProjectName(hoverTooltip.entry.path) }}
               </span>
             </div>
           </div>
 
-          <!-- Full File Path -->
-          <div class="text-[10.5px] text-slate-400 font-mono break-all leading-tight select-none border-t border-white/[0.06] pt-1">
+          <!-- Full File / Directory Path -->
+          <div class="text-[11px] text-slate-400 font-mono break-all leading-relaxed mt-1.5 select-text">
             {{ hoverTooltip.entry.path }}
           </div>
         </div>

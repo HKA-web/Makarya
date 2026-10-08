@@ -539,7 +539,7 @@ function handleCommitKeydown(e: KeyboardEvent) {
       >
         <div
           v-if="hoverTooltip && hoverTooltip.file"
-          class="fixed z-[9999] pointer-events-none px-3 py-2 rounded-xl bg-[#090e17]/95 backdrop-blur-2xl border border-white/[0.14] shadow-[0_15px_35px_-5px_rgba(0,0,0,0.8)] flex flex-col gap-1.5 min-w-[260px] max-w-md ring-1 ring-white/[0.08]"
+          class="fixed z-[9999] pointer-events-none px-3.5 py-2.5 rounded-2xl bg-[#0b101b]/98 backdrop-blur-3xl border border-white/[0.14] shadow-[0_20px_50px_rgba(0,0,0,0.85)] flex flex-col min-w-[280px] max-w-lg ring-1 ring-white/[0.08]"
           :style="{
             right: `${hoverTooltip.right}px`,
             top: `${hoverTooltip.top}px`
@@ -547,19 +547,19 @@ function handleCommitKeydown(e: KeyboardEvent) {
         >
           <!-- Header: File Name + Status Badge & Project Badge -->
           <div class="flex items-center justify-between gap-3">
-            <div class="flex items-center gap-1.5 min-w-0">
+            <div class="flex items-center gap-2 min-w-0">
               <UIcon
                 :name="getNuxtFileIcon(hoverTooltip.file.path).icon"
-                :class="[getNuxtFileIcon(hoverTooltip.file.path).colorClass, 'size-3.5 flex-shrink-0']"
+                :class="[getNuxtFileIcon(hoverTooltip.file.path).colorClass, 'size-4 flex-shrink-0']"
               />
-              <span class="text-xs font-semibold text-white font-mono truncate">{{ getFileName(hoverTooltip.file.path) }}</span>
+              <span class="text-xs font-bold text-white font-mono truncate">{{ getFileName(hoverTooltip.file.path) }}</span>
             </div>
 
             <div class="flex items-center gap-1.5 flex-shrink-0">
               <!-- Git Status Tag -->
               <span
                 :class="[
-                  'text-[9px] font-bold px-1.5 py-0.2 rounded border font-mono uppercase tracking-wider',
+                  'text-[9.5px] font-bold px-2 py-0.5 rounded-md border font-mono uppercase tracking-wider',
                   getStatusBadgeClass(hoverTooltip.file.status)
                 ]"
               >
@@ -569,7 +569,7 @@ function handleCommitKeydown(e: KeyboardEvent) {
               <!-- Project Name Badge -->
               <span
                 v-if="getProjectName()"
-                class="px-1.5 py-0.2 rounded-md bg-[#42b883]/15 border border-[#42b883]/30 text-[#42b883] font-mono text-[9px] font-bold uppercase tracking-wider"
+                class="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/35 text-emerald-400 font-mono text-[9.5px] font-bold uppercase tracking-wider"
               >
                 {{ getProjectName() }}
               </span>
@@ -577,7 +577,7 @@ function handleCommitKeydown(e: KeyboardEvent) {
           </div>
 
           <!-- Full File Path -->
-          <div class="text-[10.5px] text-slate-400 font-mono break-all leading-tight select-none border-t border-white/[0.06] pt-1">
+          <div class="text-[11px] text-slate-400 font-mono break-all leading-relaxed mt-1.5 select-text">
             {{ getFullFilePath(hoverTooltip.file.path) }}
           </div>
         </div>

@@ -262,7 +262,6 @@ async function handleMenuAddWorkspace(): Promise<void> {
           @click="workspaceStore.openAboutModal()"
           class="flex items-center gap-2 cursor-pointer group px-1.5 py-0.5 rounded-lg hover:bg-white/[0.08] transition-colors border border-transparent hover:border-white/[0.1] active:scale-95"
           style="-webkit-app-region: no-drag;"
-          title="Tentang Makarya IDE (About)"
         >
           <!-- Makarya Logo Icon -->
           <img :src="iconImg" alt="Makarya IDE Logo" class="h-6 w-auto object-contain drop-shadow-md select-none mr-0.5 group-hover:scale-105 transition-transform" />
@@ -276,7 +275,6 @@ async function handleMenuAddWorkspace(): Promise<void> {
             <button
               @click="handleMinimize"
               class="w-7 h-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors cursor-pointer"
-              title="Minimize"
             >
               <UIcon name="i-lucide-minus" class="size-3.5" />
             </button>
@@ -284,7 +282,6 @@ async function handleMenuAddWorkspace(): Promise<void> {
             <button
               @click="handleMaximizeToggle"
               class="w-7 h-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/[0.08] active:bg-white/[0.12] transition-colors cursor-pointer"
-              :title="isWindowMaximized ? 'Restore' : 'Maximize'"
             >
               <UIcon :name="isWindowMaximized ? 'i-lucide-copy' : 'i-lucide-square'" class="size-3.5" />
             </button>
@@ -292,7 +289,6 @@ async function handleMenuAddWorkspace(): Promise<void> {
             <button
               @click="handleClose"
               class="w-7 h-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-white hover:bg-rose-500 active:bg-rose-600 transition-colors cursor-pointer"
-              title="Close"
             >
               <UIcon name="i-lucide-x" class="size-3.5" />
             </button>

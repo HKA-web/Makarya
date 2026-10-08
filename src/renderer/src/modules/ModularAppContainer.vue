@@ -28,7 +28,6 @@ const isManagerOpen = ref(false)
         :class="activeModuleId === mod.manifest.id
           ? 'bg-[#131d2e] text-[#42b883] border border-[#42b883]/30 shadow-xs'
           : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04] border border-transparent'"
-        :title="mod.manifest.description || mod.manifest.name"
       >
         <UIcon :name="mod.manifest.icon" class="size-3.5" />
         <span class="text-[11px]">{{ mod.manifest.name }}</span>

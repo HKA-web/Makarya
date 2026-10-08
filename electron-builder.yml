@@ -18,6 +18,7 @@ asarUnpack:
 
 win:
   icon: build/icon.ico
+  artifactName: "${productName} v${version}.${ext}"
   target:
     - target: nsis
       arch:
@@ -35,3 +36,7 @@ nsis:
   installerIcon: build/icon.ico
   uninstallerIcon: build/icon.ico
   installerHeaderIcon: build/icon.ico
+  artifactName: "${productName} Setup v${version}.${ext}"
+
+portable:
+  artifactName: "${productName} v${version}.${ext}"
