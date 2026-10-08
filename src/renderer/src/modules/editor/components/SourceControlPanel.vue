@@ -3,6 +3,7 @@ import { ref, onMounted, computed, watch } from 'vue'
 import { useGitStore, type GitFileItem } from '@renderer/stores/gitStore'
 import { useWorkspaceStore } from '@renderer/stores/workspaceStore'
 import { getNuxtFileIcon } from '@renderer/utils/languageDetector'
+import GitDiffModal from './GitDiffModal.vue'
 
 const gitStore = useGitStore()
 const workspaceStore = useWorkspaceStore()
@@ -71,6 +72,11 @@ function handleCommitKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
     e.preventDefault()
     gitStore.commit()
+  } else if ((e.altKey && (e.key === 'g' || e.key === 'G')) || ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'g' || e.key === 'G'))) {
+    e.preventDefault()
+    if (!gitStore.isGeneratingMessage) {
+      gitStore.generateCommitMessage()
+    }
   }
 }
 </script>
@@ -153,32 +159,47 @@ function handleCommitKeydown(e: KeyboardEvent) {
       <!-- Commit Box Area -->
       <div class="p-2.5 bg-[#080d16]/70 border-b border-white/[0.06] space-y-2 flex-shrink-0">
         <!-- Commit Textarea with AI Magic Button -->
-        <div class="relative bg-[#0b101b] border border-white/[0.08] focus-within:border-emerald-500/50 focus-within:ring-1 focus-within:ring-emerald-500/20 rounded-xl p-2 transition-all">
+        <div
+          class="relative bg-[#0b101b] border border-white/[0.08] focus-within:border-emerald-500/50 focus-within:ring-1 focus-within:ring-emerald-500/20 rounded-xl p-2 transition-all duration-200"
+          :class="{ 'border-emerald-500/40 ring-1 ring-emerald-500/30 shadow-[0_0_15px_rgba(16,185,129,0.15)]': gitStore.isGeneratingMessage }"
+        >
           <textarea
             v-model="gitStore.commitMessage"
             @keydown="handleCommitKeydown"
             placeholder="Pesan commit (Ctrl+Enter untuk Commit)..."
-            rows="2"
-            class="w-full bg-transparent border-none text-[11px] text-slate-100 placeholder:text-slate-500 focus:outline-none resize-none p-0 leading-relaxed font-sans min-h-[38px] max-h-[80px] custom-scrollbar"
+            rows="3"
+            class="w-full bg-transparent border-none text-[11px] text-slate-100 placeholder:text-slate-500 focus:outline-none resize-none p-0 leading-relaxed font-sans min-h-[50px] max-h-[140px] custom-scrollbar"
           ></textarea>
 
           <!-- AI Magic Commit Generator Button -->
-          <div class="flex items-center justify-between pt-1 border-t border-white/[0.04]">
+          <div class="flex items-center justify-between pt-1.5 border-t border-white/[0.04]">
             <button
               @click="gitStore.generateCommitMessage()"
               :disabled="gitStore.isGeneratingMessage"
-              class="px-2 py-0.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/25 text-emerald-300 text-[10px] font-medium flex items-center gap-1 transition-all cursor-pointer disabled:opacity-40"
-              title="Buat pesan commit otomatis dari diff dengan AI (✨)"
+              class="px-2 py-1 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 active:bg-emerald-500/30 border border-emerald-500/25 hover:border-emerald-500/40 text-emerald-300 hover:text-emerald-200 text-[10px] font-medium flex items-center gap-1.5 transition-all cursor-pointer shadow-xs disabled:opacity-40 disabled:cursor-not-allowed group"
+              title="Buat pesan commit otomatis dari diff dengan AI (Alt+G)"
             >
               <UIcon
                 name="i-lucide-sparkles"
-                class="size-3 text-emerald-400"
-                :class="{ 'animate-spin': gitStore.isGeneratingMessage }"
+                class="size-3 text-emerald-400 group-hover:scale-110 transition-transform"
+                :class="{ 'animate-spin text-emerald-300': gitStore.isGeneratingMessage }"
               />
-              <span>{{ gitStore.isGeneratingMessage ? 'Menganalisis diff...' : 'Generate with AI' }}</span>
+              <span class="tracking-wide">{{ gitStore.isGeneratingMessage ? 'Menganalisis diff...' : 'Generate with AI' }}</span>
+              <span class="text-[9px] px-1 py-0.2 rounded bg-emerald-500/15 text-emerald-400/80 font-mono hidden sm:inline-block">Alt+G</span>
             </button>
 
-            <span class="text-[9px] font-mono text-slate-500">Ctrl+↵</span>
+            <div class="flex items-center gap-1.5">
+              <!-- Clear button if text exists -->
+              <button
+                v-if="gitStore.commitMessage.trim()"
+                @click="gitStore.commitMessage = ''"
+                class="w-4 h-4 rounded flex items-center justify-center text-slate-500 hover:text-rose-400 transition-colors cursor-pointer"
+                title="Hapus teks commit"
+              >
+                <UIcon name="i-lucide-x" class="size-2.5" />
+              </button>
+              <span class="text-[9px] font-mono text-slate-500" title="Tekan Ctrl+Enter untuk melakukan commit">Ctrl+↵</span>
+            </div>
           </div>
         </div>
 
@@ -240,7 +261,10 @@ function handleCommitKeydown(e: KeyboardEvent) {
               >
                 <!-- File Name & Dir -->
                 <div class="flex items-center gap-1.5 min-w-0 pr-1">
-                  <UIcon :name="getNuxtFileIcon(file.path)" class="size-3.5 flex-shrink-0" />
+                  <UIcon
+                    :name="getNuxtFileIcon(file.path).icon"
+                    :class="['size-3.5 flex-shrink-0', getNuxtFileIcon(file.path).colorClass]"
+                  />
                   <span class="font-medium text-slate-200 truncate text-[11px]">{{ getFileName(file.path) }}</span>
                   <span v-if="getFileDir(file.path)" class="text-[9px] text-slate-500 font-mono truncate">
                     {{ getFileDir(file.path) }}
@@ -325,7 +349,10 @@ function handleCommitKeydown(e: KeyboardEvent) {
               >
                 <!-- File Name & Dir -->
                 <div class="flex items-center gap-1.5 min-w-0 pr-1">
-                  <UIcon :name="getNuxtFileIcon(file.path)" class="size-3.5 flex-shrink-0" />
+                  <UIcon
+                    :name="getNuxtFileIcon(file.path).icon"
+                    :class="['size-3.5 flex-shrink-0', getNuxtFileIcon(file.path).colorClass]"
+                  />
                   <span class="font-medium text-slate-200 truncate text-[11px]">{{ getFileName(file.path) }}</span>
                   <span v-if="getFileDir(file.path)" class="text-[9px] text-slate-500 font-mono truncate">
                     {{ getFileDir(file.path) }}
@@ -371,6 +398,9 @@ function handleCommitKeydown(e: KeyboardEvent) {
         </div>
       </div>
     </div>
+
+    <!-- Independent Git Diff Modal Viewer -->
+    <GitDiffModal />
   </aside>
 </template>
 

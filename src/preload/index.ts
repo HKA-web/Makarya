@@ -158,8 +158,11 @@ const makaryaAPI = {
     ipcRenderer.invoke('git:commit', projectPath, message),
   gitGetDiff: (projectPath: string, filePath: string, staged?: boolean): Promise<{ originalContent: string; newContent: string }> =>
     ipcRenderer.invoke('git:get-diff', projectPath, filePath, staged),
-  gitGenerateCommitMsg: (projectPath: string, model?: string): Promise<string> =>
-    ipcRenderer.invoke('git:generate-commit-msg', projectPath, model),
+  gitGenerateCommitMsg: (
+    projectPath: string,
+    model?: string,
+    config?: { baseUrl?: string; apiKey?: string }
+  ): Promise<string> => ipcRenderer.invoke('git:generate-commit-msg', projectPath, model, config),
   gitPush: (projectPath: string): Promise<{ success: boolean; message?: string; error?: string }> =>
     ipcRenderer.invoke('git:push', projectPath),
   gitPull: (projectPath: string): Promise<{ success: boolean; message?: string; error?: string }> =>

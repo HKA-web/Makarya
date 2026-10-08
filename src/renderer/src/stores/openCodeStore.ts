@@ -392,7 +392,7 @@ export const useOpenCodeStore = defineStore('openCodeStore', () => {
       isStreaming: true,
       thinking: '',
       isThinkingExpanded: true,
-      activeStatusText: 'Menghubungkan ke OpenCode CLI Engine...'
+      activeStatusText: 'Menghubungkan ke OpenCode Agent Engine...'
     })
     assistantMsg.id = reqId
 

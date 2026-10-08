@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { useWorkspaceStore } from './workspaceStore'
+import { useSettingsStore } from './settingsStore'
+import { detectMonacoLanguage } from '@renderer/utils/languageDetector'
 
 export interface GitFileItem {
   path: string
@@ -10,8 +12,19 @@ export interface GitFileItem {
   isStaged: boolean
 }
 
+export interface GitDiffModalState {
+  isOpen: boolean
+  file: GitFileItem | null
+  isStaged: boolean
+  originalContent: string
+  newContent: string
+  language: string
+  fullPath: string
+}
+
 export const useGitStore = defineStore('gitStore', () => {
   const workspaceStore = useWorkspaceStore()
+  const settingsStore = useSettingsStore()
 
   const isGitRepo = ref<boolean>(false)
   const branch = ref<string>('main')
@@ -114,11 +127,13 @@ export const useGitStore = defineStore('gitStore', () => {
     }
   }
 
-  async function discardFile(file: GitFileItem): Promise<void> {
+  async function discardFile(file: GitFileItem | string): Promise<void> {
     const root = getProjectRoot()
     if (!root || !window.makaryaAPI?.gitDiscard) return
+    const filePath = typeof file === 'string' ? file : file.path
+    const isUntracked = typeof file === 'string' ? false : file.status === 'untracked'
     try {
-      await window.makaryaAPI.gitDiscard(root, file.path, file.status === 'untracked')
+      await window.makaryaAPI.gitDiscard(root, filePath, isUntracked)
       await refreshStatus()
       workspaceStore.refreshFileTree()
     } catch (err) {
@@ -171,7 +186,12 @@ export const useGitStore = defineStore('gitStore', () => {
 
     isGeneratingMessage.value = true
     try {
-      const suggested = await window.makaryaAPI.gitGenerateCommitMsg(root)
+      const model = settingsStore.ai?.defaultModel || ''
+      const customConfig = {
+        baseUrl: settingsStore.ai?.baseUrl,
+        apiKey: settingsStore.ai?.apiKey
+      }
+      const suggested = await window.makaryaAPI.gitGenerateCommitMsg(root, model, customConfig)
       if (suggested) {
         commitMessage.value = suggested
       }
@@ -213,6 +233,53 @@ export const useGitStore = defineStore('gitStore', () => {
     }
   }
 
+  const diffModal = ref<GitDiffModalState>({
+    isOpen: false,
+    file: null,
+    isStaged: false,
+    originalContent: '',
+    newContent: '',
+    language: 'plaintext',
+    fullPath: ''
+  })
+
+  function closeDiffModal(): void {
+    diffModal.value.isOpen = false
+    diffModal.value.file = null
+  }
+
+  // Combined list of changed files for modal navigation
+  const allChangedFiles = computed<Array<{ file: GitFileItem; isStaged: boolean }>>(() => {
+    const list: Array<{ file: GitFileItem; isStaged: boolean }> = []
+    staged.value.forEach((f) => list.push({ file: f, isStaged: true }))
+    unstaged.value.forEach((f) => list.push({ file: f, isStaged: false }))
+    untracked.value.forEach((f) => list.push({ file: f, isStaged: false }))
+    return list
+  })
+
+  const currentDiffIndex = computed<number>(() => {
+    if (!diffModal.value.file) return -1
+    return allChangedFiles.value.findIndex(
+      (item) => item.file.path === diffModal.value.file?.path && item.isStaged === diffModal.value.isStaged
+    )
+  })
+
+  async function nextDiffFile(): Promise<void> {
+    const list = allChangedFiles.value
+    if (list.length <= 1) return
+    const nextIdx = (currentDiffIndex.value + 1) % list.length
+    const nextItem = list[nextIdx]
+    await openFileDiff(nextItem.file, nextItem.isStaged)
+  }
+
+  async function prevDiffFile(): Promise<void> {
+    const list = allChangedFiles.value
+    if (list.length <= 1) return
+    const prevIdx = (currentDiffIndex.value - 1 + list.length) % list.length
+    const prevItem = list[prevIdx]
+    await openFileDiff(prevItem.file, prevItem.isStaged)
+  }
+
   async function openFileDiff(file: GitFileItem, isStaged = false): Promise<void> {
     const root = getProjectRoot()
     if (!root || !window.makaryaAPI?.gitGetDiff) return
@@ -220,16 +287,19 @@ export const useGitStore = defineStore('gitStore', () => {
     try {
       const fullPath = root.endsWith('\\') || root.endsWith('/') ? `${root}${file.path}` : `${root}/${file.path}`
       const diffData = await window.makaryaAPI.gitGetDiff(root, file.path, isStaged)
+      const language = detectMonacoLanguage(file.path)
 
-      // Open tab in editor
-      await workspaceStore.openFile(fullPath, file.path.split(/[\\/]/).pop() || file.path)
-
-      // Register pending diff in workspaceStore so Monaco displays the Antigravity diff review
-      if (diffData.originalContent !== diffData.newContent) {
-        workspaceStore.setPendingDiff(fullPath, diffData.originalContent, diffData.newContent)
+      diffModal.value = {
+        isOpen: true,
+        file,
+        isStaged,
+        originalContent: diffData.originalContent || '',
+        newContent: diffData.newContent || '',
+        language,
+        fullPath
       }
     } catch (err) {
-      console.warn('[GitStore] Error opening file diff:', err)
+      console.warn('[GitStore] Error opening file diff modal:', err)
     }
   }
 
@@ -250,6 +320,9 @@ export const useGitStore = defineStore('gitStore', () => {
     isGeneratingMessage,
     isPushing,
     isPulling,
+    diffModal,
+    allChangedFiles,
+    currentDiffIndex,
     refreshStatus,
     stageFile,
     stageAll,
@@ -261,6 +334,9 @@ export const useGitStore = defineStore('gitStore', () => {
     generateCommitMessage,
     push,
     pull,
-    openFileDiff
+    openFileDiff,
+    closeDiffModal,
+    nextDiffFile,
+    prevDiffFile
   }
 })

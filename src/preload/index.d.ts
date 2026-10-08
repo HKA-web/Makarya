@@ -145,7 +145,11 @@ export interface ElectronAPI {
   gitDiscardAll: (projectPath: string) => Promise<boolean>
   gitCommit: (projectPath: string, message: string) => Promise<{ success: boolean; hash?: string; error?: string }>
   gitGetDiff: (projectPath: string, filePath: string, staged?: boolean) => Promise<{ originalContent: string; newContent: string }>
-  gitGenerateCommitMsg: (projectPath: string, model?: string) => Promise<string>
+  gitGenerateCommitMsg: (
+    projectPath: string,
+    model?: string,
+    config?: { baseUrl?: string; apiKey?: string }
+  ) => Promise<string>
   gitPush: (projectPath: string) => Promise<{ success: boolean; message?: string; error?: string }>
   gitPull: (projectPath: string) => Promise<{ success: boolean; message?: string; error?: string }>
   abortChatMessage: (requestId: string) => Promise<{ aborted: boolean }>

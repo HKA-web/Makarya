@@ -268,10 +268,18 @@ export class GitService {
   /**
    * Commit staged files with message
    */
+  /**
+   * Commit staged files with message (supporting multi-line and bullet points)
+   */
   public async commit(projectPath: string, message: string): Promise<{ success: boolean; hash?: string; error?: string }> {
     try {
-      const escaped = message.replace(/"/g, '\\"')
-      const stdout = await this.runGit(projectPath, `commit -m "${escaped}"`)
+      const lines = message.split('\n').map((l) => l.trim()).filter((l) => l.length > 0)
+      if (lines.length === 0) {
+        return { success: false, error: 'Pesan commit kosong' }
+      }
+
+      const mArgs = lines.map((l) => `-m "${l.replace(/"/g, '\\"')}"`).join(' ')
+      const stdout = await this.runGit(projectPath, `commit ${mArgs}`)
       const hashMatch = stdout.match(/\[([^\]]+)\s+([a-f0-9]+)\]/)
       return {
         success: true,
@@ -295,33 +303,34 @@ export class GitService {
   ): Promise<{ originalContent: string; newContent: string }> {
     let originalContent = ''
     let newContent = ''
+    const gitFilePath = filePath.replace(/\\/g, '/')
+    const fullPath = join(projectPath, filePath)
 
     try {
       if (staged) {
         // Original is HEAD, new is staged index (:filePath)
         try {
-          originalContent = await this.runGit(projectPath, `show HEAD:"${filePath}"`)
+          originalContent = await this.runGit(projectPath, `show HEAD:"${gitFilePath}"`)
         } catch {
           originalContent = ''
         }
         try {
-          newContent = await this.runGit(projectPath, `show :"${filePath}"`)
+          newContent = await this.runGit(projectPath, `show :"${gitFilePath}"`)
         } catch {
           newContent = ''
         }
       } else {
         // Original is staged index or HEAD, new is working tree file
         try {
-          originalContent = await this.runGit(projectPath, `show :"${filePath}"`)
+          originalContent = await this.runGit(projectPath, `show :"${gitFilePath}"`)
         } catch {
           try {
-            originalContent = await this.runGit(projectPath, `show HEAD:"${filePath}"`)
+            originalContent = await this.runGit(projectPath, `show HEAD:"${gitFilePath}"`)
           } catch {
             originalContent = ''
           }
         }
 
-        const fullPath = join(projectPath, filePath)
         if (existsSync(fullPath)) {
           const fs = await import('fs/promises')
           newContent = await fs.readFile(fullPath, 'utf-8')
@@ -335,67 +344,280 @@ export class GitService {
   }
 
   /**
-   * Generate AI Commit Message from staged & unstaged diff
+   * Generate AI Commit Message with essential diff distillation and detailed bullet points
    */
-  public async generateAiCommitMessage(projectPath: string, model?: string): Promise<string> {
+  /**
+   * Generate AI Commit Message with essential diff distillation and detailed bullet points
+   */
+  public async generateAiCommitMessage(
+    projectPath: string,
+    model?: string,
+    customConfig?: { baseUrl?: string; apiKey?: string }
+  ): Promise<string> {
     try {
+      let statOutput = ''
       let diffOutput = ''
+
+      // 1. Get Staged Diff & Stats
       try {
+        statOutput = await this.runGit(projectPath, 'diff --cached --stat')
         diffOutput = await this.runGit(projectPath, 'diff --cached')
-        if (!diffOutput) {
-          diffOutput = await this.runGit(projectPath, 'diff')
-        }
       } catch {}
 
-      if (!diffOutput) {
+      // 2. If no staged changes, fall back to unstaged changes
+      if (!diffOutput || diffOutput.trim().length === 0) {
+        try {
+          statOutput = await this.runGit(projectPath, 'diff --stat')
+          diffOutput = await this.runGit(projectPath, 'diff')
+        } catch {}
+      }
+
+      // 3. If still empty, check short status
+      if (!diffOutput || diffOutput.trim().length === 0) {
         const stat = await this.runGit(projectPath, 'status --short')
+        if (!stat || stat.trim().length === 0) {
+          return 'chore: update project files'
+        }
         diffOutput = `Changed files:\n${stat}`
       }
 
-      // Limit diff length for prompt
-      const truncatedDiff = diffOutput.slice(0, 4000)
+      // 4. Extract ONLY essential changes across all files (prevents 1 big file from crowding out others)
+      const essentialDiff = this.extractEssentialDiff(diffOutput, 6000)
+      const statHeader = statOutput ? `Summary of changed files:\n${statOutput.trim()}\n\n` : ''
 
-      const prompt = `Anda adalah asisten AI Git. Buatkan pesan commit ringkas, profesional, dan akurat mengikuti format Conventional Commits (contoh: 'feat: add user authentication' atau 'fix(editor): handle diff line scrolling' atau 'refactor: isolate claude store').
+      const prompt = `You are an expert Git commit message generator. Analyze the following summary and essential code changes to generate a clean, creative, and highly descriptive Conventional Commit message with detailed bullet points.
 
-Berikut adalah git diff perubahan kode:
+${statHeader}Essential Code Changes:
 \`\`\`diff
-${truncatedDiff}
+${essentialDiff}
 \`\`\`
 
-Instruksi:
-1. Berikan HANYA 1 baris pesan commit (maksimal 72 karakter).
-2. Jangan sertakan tanda kutip, jangan sertakan penjelasan tambahan, jangan gunakan markdown formatting. Cukup 1 baris judul commit.`
+Strict Format & Guidelines:
+1. Line 1: Standard Conventional Commit subject: <type>(<scope>): <concise descriptive summary in lowercase>
+   (Types: feat, fix, refactor, style, docs, chore, perf, test)
+2. Line 2: Empty line.
+3. Line 3+: Exactly 2 to 4 clear, specific bullet points starting with "- " explaining the exact improvements, bug fixes, path normalizations, or logic updates in Indonesian (or English if codebase is purely in English).
+4. Do NOT output markdown code blocks (\`\`\`) or quotes. Output ONLY the raw commit message with bullet points.
 
-      // Execute AI generation via 9Router / direct LLM
-      const config = this.aiAgentService.getConfiguration()
-      const chosenModel = model || config.defaultModel || 'Antigravity'
+Example Output:
+feat(payroll): improve ai commit message generator dan normalisasi path
 
-      const response = await fetch(`${config.apiBaseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${config.apiKey}`
-        },
-        body: JSON.stringify({
-          model: chosenModel,
-          messages: [{ role: 'user', content: prompt }],
-          temperature: 0.3,
-          max_tokens: 60
+- Normalisasi separator path Windows ke slash standar buat git show
+- Tambah ekstraksi diff esensial biar ga boros token LLM
+- Implementasi fallback heuristik kalau request AI timeout atau gagal`
+
+      // Execute AI generation via active config / 9Router / direct LLM
+      const mainConfig = this.aiAgentService.getConfiguration()
+      const baseUrl = (customConfig?.baseUrl || mainConfig.baseUrl || 'http://127.0.0.1:20128/v1').replace(/\/+$/, '')
+      const apiKey = customConfig?.apiKey || mainConfig.apiKey || 'sk-antigravity'
+      const chosenModel = model || mainConfig.defaultModel || 'Antigravity'
+
+      try {
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), 12000)
+
+        const response = await fetch(`${baseUrl}/chat/completions`, {
+          method: 'POST',
+          signal: controller.signal,
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${apiKey}`
+          },
+          body: JSON.stringify({
+            model: chosenModel,
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.3,
+            max_tokens: 220
+          })
         })
-      })
 
-      if (response.ok) {
-        const data = await response.json()
-        const rawMsg = data.choices?.[0]?.message?.content || ''
-        const cleanMsg = rawMsg.trim().replace(/^["'`]|["'`]$/g, '').replace(/^commit:\s*/i, '')
-        return cleanMsg || 'chore: update project changes'
+        clearTimeout(timeoutId)
+
+        if (response.ok) {
+          const data = await response.json()
+          const rawMsg = data.choices?.[0]?.message?.content || ''
+          const cleanMsg = rawMsg
+            .trim()
+            .replace(/^```(?:markdown|git)?\n?|```$/gi, '')
+            .trim()
+          if (cleanMsg && cleanMsg.length > 10) return cleanMsg
+        }
+      } catch (fetchErr) {
+        console.warn('[GitService] LLM commit generation fetch error, using smart semantic fallback:', fetchErr)
       }
 
-      return 'chore: update project changes'
+      // Smart semantic fallback based on deep file inspection
+      return this.generateSmartFallbackCommit(statOutput || diffOutput)
     } catch (err) {
       console.warn('[GitService] Error generating AI commit message:', err)
       return 'chore: update project files'
     }
+  }
+
+  /**
+   * Distill essential diff chunks across multiple files
+   */
+  private extractEssentialDiff(rawDiff: string, maxChars = 5000): string {
+    if (rawDiff.length <= maxChars) return rawDiff
+
+    const lines = rawDiff.split('\n')
+    const result: string[] = []
+    let currentFile = ''
+    let linesInCurrentHunk = 0
+    let currentLength = 0
+
+    for (const line of lines) {
+      // New file diff header
+      if (line.startsWith('diff --git') || line.startsWith('--- ') || line.startsWith('+++ ')) {
+        currentFile = line
+        linesInCurrentHunk = 0
+        result.push(line)
+        currentLength += line.length + 1
+        continue
+      }
+
+      // Skip huge binary or lock files
+      if (
+        currentFile.includes('package-lock.json') ||
+        currentFile.includes('yarn.lock') ||
+        currentFile.includes('composer.lock') ||
+        currentFile.includes('.min.')
+      ) {
+        continue
+      }
+
+      // Hunk header (contains function name / line range)
+      if (line.startsWith('@@')) {
+        linesInCurrentHunk = 0
+        result.push(line)
+        currentLength += line.length + 1
+        continue
+      }
+
+      // Keep only first 8 lines of each diff hunk to leave room for other files
+      if (line.startsWith('+') || line.startsWith('-')) {
+        if (linesInCurrentHunk < 8) {
+          result.push(line)
+          currentLength += line.length + 1
+          linesInCurrentHunk++
+        }
+      }
+
+      if (currentLength >= maxChars) {
+        result.push('... [diff truncated for brevity]')
+        break
+      }
+    }
+
+    return result.join('\n')
+  }
+
+  /**
+   * Smart semantic heuristic commit message generator with diverse action verbs
+   */
+  private generateSmartFallbackCommit(summary: string): string {
+    const rawLines = summary.split('\n').map((l) => l.trim()).filter(Boolean)
+    if (rawLines.length === 0) return 'chore: update project changes'
+
+    // Extract file paths from git stat (format: "path/to/file.ext | 10 +-") or status ("M path/to/file.ext")
+    const filePaths: string[] = []
+    for (const line of rawLines) {
+      const statMatch = line.match(/^([^|]+?)\s*\|/)
+      if (statMatch) {
+        filePaths.push(statMatch[1].trim())
+        continue
+      }
+      const statusMatch = line.match(/^[MADRCU?!]+\s+(.+)$/)
+      if (statusMatch) {
+        filePaths.push(statusMatch[1].trim())
+      }
+    }
+
+    if (filePaths.length === 0) {
+      return 'chore: update project files'
+    }
+
+    // Filter out irrelevant build/lock files
+    const relevantFiles = filePaths.filter(
+      (p) => !p.includes('package-lock.json') && !p.includes('dist/') && !p.includes('node_modules/')
+    )
+    const targetFiles = relevantFiles.length > 0 ? relevantFiles : filePaths
+
+    // 1. Detect Scope
+    let scope = ''
+    const moduleMatch = targetFiles[0].match(/(?:modules|features|components|controllers|models|views|libraries)\/([^/]+)/i)
+    if (moduleMatch) {
+      scope = moduleMatch[1].toLowerCase()
+    } else {
+      const dirParts = targetFiles[0].split(/[/\\]/)
+      if (dirParts.length > 1) {
+        scope = dirParts[dirParts.length - 2].toLowerCase()
+      }
+    }
+
+    // Clean up scope if too generic
+    if (['src', 'app', 'application', 'modules', 'dist', 'out'].includes(scope)) {
+      scope = ''
+    }
+
+    // 2. Detect Action & Type
+    const isMigration = targetFiles.some((f) => f.includes('migration') || f.endsWith('.sql'))
+    const isViewOrUi = targetFiles.some((f) => f.endsWith('.vue') || f.endsWith('.css') || f.includes('/views/'))
+    const isModelOrDb = targetFiles.some((f) => f.includes('/models/') || f.endsWith('.sql'))
+    const isController = targetFiles.some((f) => f.includes('/controllers/') || f.includes('/controller/'))
+    const isLibrary = targetFiles.some((f) => f.includes('/libraries/') || f.includes('/lib/'))
+
+    const fileBaseNames = targetFiles
+      .slice(0, 2)
+      .map((f) => f.split(/[/\\]/).pop()?.replace(/\.[^.]+$/, '') || '')
+      .filter(Boolean)
+
+    const fileDesc = fileBaseNames.join(' and ')
+
+    // Action verbs for varied and natural bullet points
+    const verbs = [
+      'Optimalkan penanganan dan eksekusi logika pada',
+      'Perbarui validasi parameter dan integrasi di',
+      'Perbaiki alur pemrosesan data pada',
+      'Refactor struktur fungsi dan efisiensi modul'
+    ]
+
+    const bullets: string[] = []
+    targetFiles.slice(0, 4).forEach((file, idx) => {
+      const bName = file.split(/[/\\]/).pop() || file
+      const verb = verbs[idx % verbs.length]
+
+      if (file.includes('migration') || file.endsWith('.sql')) {
+        bullets.push(`- Update skrip migrasi dan struktur tabel pada ${bName}`)
+      } else if (file.endsWith('.vue') || file.endsWith('.css')) {
+        bullets.push(`- Sempurnakan tampilan antarmuka dan komponen ${bName}`)
+      } else if (file.includes('/controllers/') || file.includes('/controller/')) {
+        bullets.push(`- ${verb} controller ${bName}`)
+      } else if (file.includes('/models/') || file.includes('/model/')) {
+        bullets.push(`- Sesuaikan kueri database dan model data ${bName}`)
+      } else if (file.includes('/libraries/') || file.includes('/lib/')) {
+        bullets.push(`- Refactor helper utility dan modul pustaka ${bName}`)
+      } else {
+        bullets.push(`- Perbarui implementasi kode pada ${bName}`)
+      }
+    })
+
+    let title = ''
+    if (isMigration) {
+      title = scope ? `chore(${scope}): update database migration scripts` : `chore(db): update database migration scripts`
+    } else if (isViewOrUi) {
+      title = scope ? `fix(${scope}): update ${fileDesc || 'ui layout'}` : `fix(ui): update ${fileDesc || 'components'}`
+    } else if (isController) {
+      title = scope ? `feat(${scope}): update ${fileDesc || 'controller logic'}` : `feat: update ${fileDesc || 'controller'}`
+    } else if (isModelOrDb) {
+      title = scope ? `feat(${scope}): update ${fileDesc || 'data model'}` : `feat(model): update ${fileDesc || 'data queries'}`
+    } else if (isLibrary) {
+      title = scope ? `refactor(${scope}): update ${fileDesc || 'library helpers'}` : `refactor: update ${fileDesc || 'library'}`
+    } else {
+      title = scope ? `chore(${scope}): update ${fileDesc || 'files'}` : `chore: update ${fileDesc || 'project files'}`
+    }
+
+    return bullets.length > 0 ? `${title}\n\n${bullets.join('\n')}` : title
   }
 
   /**

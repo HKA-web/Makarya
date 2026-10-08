@@ -234,7 +234,7 @@ export class OpenCodeCliService {
     try {
       let systemPrompt = ''
       if (executionMode === 'chat') {
-        systemPrompt = `Anda adalah OpenCode CLI Assistant di dalam Makarya IDE.
+        systemPrompt = `Anda adalah OpenCode Assistant di dalam Makarya IDE.
 Workspace root saat ini: "${projectRoot || 'Workspace aktif'}".
 Mode kerja saat ini: MODE CHAT (Percakapan & Q&A).
 
@@ -245,7 +245,7 @@ PANDUAN MODE CHAT:
 4. Jika pengguna menanyakan mode kerja Anda saat ini, jawab dengan tegas dan jelas bahwa Anda sedang berada di "Mode Chat (Percakapan/Q&A)".
 5. Gunakan gaya bahasa Indonesia yang profesional, ramah, dan ringkas.`
       } else {
-        systemPrompt = `Anda adalah OpenCode CLI Agent — agen pemrograman otonom tingkat lanjut yang terintegrasi di dalam Makarya IDE.
+        systemPrompt = `Anda adalah OpenCode Agent — agen pemrograman otonom tingkat lanjut yang terintegrasi di dalam Makarya IDE.
 Workspace root saat ini: "${projectRoot || 'Workspace aktif'}".
 Mode kerja saat ini: MODE AGENT (Autonomous Coding Agent).
 

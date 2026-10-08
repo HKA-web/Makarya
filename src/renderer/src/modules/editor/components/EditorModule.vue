@@ -426,7 +426,7 @@ onUnmounted(() => {
           :class="workspaceStore.isOpenCodePanelOpen
             ? 'bg-[#42b883]/20 text-[#42b883] border border-[#42b883]/40 shadow-xs shadow-[#42b883]/20'
             : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04] border border-transparent hover:border-white/[0.06]'"
-          title="OpenCode CLI Agent"
+          title="OpenCode Agent"
         >
           <img :src="openCodeLogo" alt="OpenCode" class="size-4 rounded-xs object-contain" />
         </button>

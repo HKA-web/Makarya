@@ -423,7 +423,7 @@ function getToolSummaryArg(tool: any): string {
       </div>
       <div class="space-y-1">
         <p class="text-xs font-semibold text-slate-200">Memuat Riwayat Sesi...</p>
-        <p class="text-[10px] text-slate-400">Mengambil percakapan OpenCode CLI</p>
+        <p class="text-[10px] text-slate-400">Mengambil percakapan OpenCode Agent</p>
       </div>
     </div>
 
@@ -459,7 +459,7 @@ function getToolSummaryArg(tool: any): string {
         <!-- Title with Link Icon -->
         <div class="flex items-center justify-center gap-1.5 mb-1.5">
           <h2 class="text-base sm:text-lg font-bold tracking-tight text-white flex items-center justify-center gap-1.5 text-center">
-            <span class="vue-gradient-text">OpenCode CLI</span>
+            <span class="vue-gradient-text">OpenCode Agent</span>
           </h2>
           <a
             href="https://opencode.ai"
@@ -474,7 +474,7 @@ function getToolSummaryArg(tool: any): string {
 
         <!-- Subtitle -->
         <p class="text-[11px] text-slate-400 text-center max-w-[270px] mx-auto leading-relaxed mb-4">
-          Asisten coding cerdas terintegrasi. Sambungkan agen ke folder project kerja agar pemindaian berkas dan aksi agen terkunci cepat di dalam folder tersebut.
+          Agen pemrograman otonom bertenaga model OpenCode. Mendukung penalaran mendalam, arsitektur sistem, dan refactoring presisi tinggi.
         </p>
 
         <!-- Target Project Connected Badge -->
@@ -508,7 +508,7 @@ function getToolSummaryArg(tool: any): string {
         <!-- Role & Time Header for Agent -->
         <div v-else class="flex items-center gap-1.5 text-[9px] text-slate-400 px-1 mb-0.5">
           <img :src="openCodeLogo" alt="OpenCode" class="size-2.5 rounded-xs object-contain" />
-          <span class="font-medium text-[#42b883]">OpenCode CLI</span>
+          <span class="font-medium text-[#42b883]">OpenCode Agent</span>
           <span v-if="msg.timestamp" class="text-[9px] text-slate-400 font-mono">
             {{ formatMessageTime(msg.timestamp) }}
           </span>

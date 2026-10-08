@@ -815,9 +815,12 @@ function registerIpcHandlers(): void {
     return gitService.getFileDiff(projectPath, filePath, staged)
   })
 
-  ipcMain.handle('git:generate-commit-msg', async (_event, projectPath: string, model?: string) => {
-    return gitService.generateAiCommitMessage(projectPath, model)
-  })
+  ipcMain.handle(
+    'git:generate-commit-msg',
+    async (_event, projectPath: string, model?: string, customConfig?: { baseUrl?: string; apiKey?: string }) => {
+      return gitService.generateAiCommitMessage(projectPath, model, customConfig)
+    }
+  )
 
   ipcMain.handle('git:push', async (_event, projectPath: string) => {
     return gitService.push(projectPath)
