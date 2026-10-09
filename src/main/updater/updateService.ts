@@ -34,13 +34,22 @@ export interface DownloadProgressInfo {
   speedMbps: number
 }
 
+export function parseVersionParts(versionStr: string): number[] {
+  if (!versionStr) return []
+  let clean = versionStr.replace(/^v\.?/i, '').trim()
+  // Normalisasi format electron-builder prerelease hyphen pada tanggal, contoh: '2026.10.0-9.0.10' -> '2026.10.9.0.10'
+  clean = clean.replace(/\.0-/, '.')
+  const rawParts = clean.split(/[.\-_]/).filter(Boolean)
+  return rawParts.map((p) => parseInt(p, 10) || 0)
+}
+
 export function isNewerVersion(remoteTag: string, localVersion: string): boolean {
-  const cleanRemote = remoteTag.replace(/^v/i, '').trim()
-  const cleanLocal = localVersion.replace(/^v/i, '').trim()
+  const cleanRemote = remoteTag.replace(/^v\.?/i, '').trim()
+  const cleanLocal = localVersion.replace(/^v\.?/i, '').trim()
   if (!cleanRemote || !cleanLocal || cleanRemote === cleanLocal) return false
 
-  const remoteParts = cleanRemote.split(/[.\-_]/).map((p) => parseInt(p, 10) || 0)
-  const localParts = cleanLocal.split(/[.\-_]/).map((p) => parseInt(p, 10) || 0)
+  const remoteParts = parseVersionParts(remoteTag)
+  const localParts = parseVersionParts(localVersion)
   const len = Math.max(remoteParts.length, localParts.length)
 
   for (let i = 0; i < len; i++) {
@@ -59,44 +68,66 @@ export class UpdateService {
   private downloadAbortController: AbortController | null = null
 
   public getCurrentVersion(): string {
-    return typeof __APP_BUILD_DATE__ !== 'undefined' ? __APP_BUILD_DATE__ : 'v2026.10.08.22.50'
+    try {
+      if (app && app.isPackaged) {
+        return app.getVersion()
+      }
+    } catch {}
+    return typeof __APP_BUILD_DATE__ !== 'undefined' ? __APP_BUILD_DATE__ : 'v2026.10.08.23.25'
   }
 
   public async checkForUpdates(owner = this.owner, repo = this.repo): Promise<UpdateCheckResult> {
     const currentVer = this.getCurrentVersion()
-    const url = `https://api.github.com/repos/${owner}/${repo}/releases/latest`
+    const latestUrl = `https://api.github.com/repos/${owner}/${repo}/releases/latest`
+    const listUrl = `https://api.github.com/repos/${owner}/${repo}/releases`
 
     try {
-      const response = await fetch(url, {
+      let releaseData: any = null
+
+      // Coba endpoint /releases/latest terlebih dahulu
+      const response = await fetch(latestUrl, {
         headers: {
           'User-Agent': 'Makarya-IDE-AutoUpdater',
           Accept: 'application/vnd.github.v3+json'
         }
       })
 
-      if (!response.ok) {
-        if (response.status === 404) {
-          return {
-            success: true,
-            hasUpdate: false,
-            currentVersion: currentVer,
-            latestVersion: currentVer,
-            releaseTitle: 'Tidak ada rilis publik di repository',
-            releaseNotes: '',
-            publishedAt: new Date().toISOString()
+      if (response.ok) {
+        releaseData = await response.json()
+      } else {
+        // Fallback: coba ambil daftar /releases jika /latest 404
+        const fallbackRes = await fetch(listUrl, {
+          headers: {
+            'User-Agent': 'Makarya-IDE-AutoUpdater',
+            Accept: 'application/vnd.github.v3+json'
+          }
+        })
+        if (fallbackRes.ok) {
+          const list = (await fallbackRes.json()) as any[]
+          if (Array.isArray(list) && list.length > 0) {
+            releaseData = list[0]
           }
         }
-        throw new Error(`GitHub API merespons dengan status ${response.status}: ${response.statusText}`)
       }
 
-      const releaseData = (await response.json()) as any
-      const remoteTag = releaseData.tag_name || ''
+      if (!releaseData) {
+        return {
+          success: true,
+          hasUpdate: false,
+          currentVersion: currentVer,
+          latestVersion: currentVer,
+          releaseTitle: 'Tidak ada rilis publik di repository',
+          releaseNotes: '',
+          publishedAt: new Date().toISOString()
+        }
+      }
+
+      const remoteTag = releaseData.tag_name || releaseData.name || ''
       const hasUpdate = isNewerVersion(remoteTag, currentVer)
 
-      // Cari asset installer .exe terbaik (misal NSIS installer atau portable exe)
+      // Cari asset installer .exe terbaik (misal NSIS installer Setup.exe atau standalone .exe)
       let matchedAsset: ReleaseAssetInfo | undefined
       if (Array.isArray(releaseData.assets) && releaseData.assets.length > 0) {
-        // Prioritaskan installer .exe setup
         matchedAsset =
           releaseData.assets.find((a: any) => a.name?.toLowerCase().endsWith('.exe') && !a.name?.toLowerCase().includes('portable')) ||
           releaseData.assets.find((a: any) => a.name?.toLowerCase().endsWith('.exe')) ||

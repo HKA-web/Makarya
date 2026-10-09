@@ -1,7 +1,7 @@
 {
   "name": "makarya-ide",
   "productName": "Makarya IDE",
-  "version": "2026.10.08.23.59",
+  "version": "2026.10.09.00.32",
   "description": "Makarya IDE",
   "main": "./out/main/index.js",
   "author": "Makarya",
