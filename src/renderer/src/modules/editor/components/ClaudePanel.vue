@@ -16,7 +16,7 @@ const settingsStore = useSettingsStore()
 const inputText = ref('')
 const inputAreaRef = ref<HTMLTextAreaElement | null>(null)
 const messageContainer = ref<HTMLElement | null>(null)
-const includeActiveFile = ref(true)
+const includeActiveFile = ref(false)
 const copiedIndex = ref<string | null>(null)
 const isModelModalOpen = ref(false)
 const isSessionModalOpen = ref(false)
@@ -172,7 +172,13 @@ function removeAttachedImage(index: number): void {
 
 async function handleSendMessage() {
   const text = inputText.value.trim()
-  if ((!text && attachedImages.value.length === 0) || claudeStore.isExecuting) return
+  if ((!text && attachedImages.value.length === 0 && (!includeActiveFile.value || !workspaceStore.activeTab?.filePath)) || claudeStore.isExecuting) return
+
+  let displayPrompt = text || 'Harap periksa dan analisis berkas/gambar yang dilampirkan.'
+  if (includeActiveFile.value && workspaceStore.activeTab?.title) {
+    const fileBadge = `📄 ${workspaceStore.activeTab.title}`
+    displayPrompt = text ? `${fileBadge} ${text}` : fileBadge
+  }
 
   let fullPrompt = text || 'Harap periksa dan analisis gambar yang dilampirkan.'
 
@@ -190,7 +196,7 @@ async function handleSendMessage() {
   // 2. Sertakan Konteks File Aktif jika dicentang
   if (includeActiveFile.value && workspaceStore.activeTab?.filePath) {
     const activeTab = workspaceStore.activeTab
-    fullPrompt = `[Konteks File Aktif: ${activeTab.filePath}]\n\`\`\`${activeTab.language || ''}\n${activeTab.content || ''}\n\`\`\`\n\n${fullPrompt}`
+    fullPrompt = `[Konteks Berkas Aktif: ${activeTab.filePath}]\n\`\`\`${activeTab.language || ''}\n${activeTab.content || ''}\n\`\`\`\n\nInstruksi Pengguna:\n${fullPrompt}`
   }
 
   inputText.value = ''
@@ -202,7 +208,7 @@ async function handleSendMessage() {
     ? workspaceStore.activeTab.filePath.substring(0, Math.max(workspaceStore.activeTab.filePath.lastIndexOf('\\'), workspaceStore.activeTab.filePath.lastIndexOf('/')))
     : (workspaceStore.activeRootPath || (workspaceStore.workspaceRoots && workspaceStore.workspaceRoots.length > 0 ? workspaceStore.workspaceRoots[0].path : undefined)))
 
-  await claudeStore.sendPrompt(fullPrompt, projectRoot)
+  await claudeStore.sendPrompt(fullPrompt, projectRoot, displayPrompt)
 }
 
 function handleKeyDown(e: KeyboardEvent) {
@@ -232,6 +238,157 @@ async function handleResendPrompt(content: string) {
     : (workspaceStore.activeRootPath || (workspaceStore.workspaceRoots && workspaceStore.workspaceRoots.length > 0 ? workspaceStore.workspaceRoots[0].path : undefined)))
   
   await claudeStore.sendPrompt(content, projectRoot)
+}
+
+export interface DetectedOption {
+  key: string
+  badge: string
+  title: string
+  description?: string
+  fullText: string
+  isConfirmation?: boolean
+}
+
+const selectedChoiceMap = ref<Record<string, string>>({})
+
+function extractInteractiveOptions(content: string): DetectedOption[] {
+  if (!content) return []
+  const lines = content.split(/\r?\n/)
+  const options: DetectedOption[] = []
+  let currentOpt: DetectedOption | null = null
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim()
+    if (!line) continue
+
+    // 1. Match Numbered: "1. Title", "1) Title", "[1] Title", "(1) Title"
+    const numMatch = line.match(/^(?:(\d+)[\.\)\-\:]|\[(\d+)\]|\((\d+)\))\s+(.+)$/)
+    if (numMatch) {
+      if (currentOpt) options.push(currentOpt)
+      const numStr = numMatch[1] || numMatch[2] || numMatch[3]
+      const rawText = numMatch[4].trim()
+
+      let title = rawText
+      let desc = ''
+      const splitDash = rawText.split(/\s+[-–—:]\s+/)
+      if (splitDash.length > 1) {
+        title = splitDash[0].replace(/\*\*/g, '').trim()
+        desc = splitDash.slice(1).join(' - ').replace(/\*\*/g, '').trim()
+      } else {
+        title = rawText.replace(/\*\*/g, '').trim()
+      }
+
+      currentOpt = {
+        key: numStr,
+        badge: numStr,
+        title,
+        description: desc,
+        fullText: rawText
+      }
+      continue
+    }
+
+    // 2. Match Lettered: "A. Title", "A) Title", "[A] Title"
+    const letterMatch = line.match(/^(?:([A-Za-z])[\.\)\-\:]|\[([A-Za-z])\])\s+(.+)$/)
+    if (letterMatch) {
+      if (currentOpt) options.push(currentOpt)
+      const lStr = (letterMatch[1] || letterMatch[2]).toUpperCase()
+      const rawText = letterMatch[3].trim()
+
+      let title = rawText
+      let desc = ''
+      const splitDash = rawText.split(/\s+[-–—:]\s+/)
+      if (splitDash.length > 1) {
+        title = splitDash[0].replace(/\*\*/g, '').trim()
+        desc = splitDash.slice(1).join(' - ').replace(/\*\*/g, '').trim()
+      } else {
+        title = rawText.replace(/\*\*/g, '').trim()
+      }
+
+      currentOpt = {
+        key: lStr,
+        badge: lStr,
+        title,
+        description: desc,
+        fullText: rawText
+      }
+      continue
+    }
+
+    // 3. Match Bold Bullet items: "- **Option**: Description" or "* **Option** - Description"
+    const bulletMatch = line.match(/^[\*\-]\s+\*\*([^\*]+)\*\*(?:\s*[:–—\-]\s*(.*))?$/)
+    if (bulletMatch) {
+      if (currentOpt) options.push(currentOpt)
+      const title = bulletMatch[1].trim()
+      const desc = bulletMatch[2] ? bulletMatch[2].trim() : ''
+      const idx = options.length + 1
+
+      currentOpt = {
+        key: String(idx),
+        badge: String(idx),
+        title,
+        description: desc,
+        fullText: `${title}: ${desc}`.trim()
+      }
+      continue
+    }
+
+    // 4. Continue multi-line description for current option
+    if (currentOpt && !line.match(/^[#>`*-]/) && !line.startsWith('```')) {
+      if (!currentOpt.description) {
+        currentOpt.description = line
+      } else {
+        currentOpt.description += ' ' + line
+      }
+    }
+  }
+
+  if (currentOpt) {
+    options.push(currentOpt)
+  }
+
+  if (options.length >= 2) {
+    return options
+  }
+
+  // 5. Binary Confirmation Prompts e.g. "Lanjutkan? (y/n)" or "Apakah Anda ingin melanjutkan?"
+  const lower = content.toLowerCase()
+  if (
+    lower.includes('(y/n)') ||
+    lower.includes('[y/n]') ||
+    lower.includes('(yes/no)') ||
+    lower.includes('[yes/no]') ||
+    /apakah anda ingin|do you want to proceed|apakah perlu saya lanjutkan/i.test(content)
+  ) {
+    return [
+      {
+        key: 'y',
+        badge: '✓',
+        title: 'Ya, Lanjutkan',
+        description: 'Setujui dan lanjutkan proses eksekusi ini',
+        fullText: 'Ya, silakan lanjutkan.',
+        isConfirmation: true
+      },
+      {
+        key: 'n',
+        badge: '✕',
+        title: 'Tidak / Batalkan',
+        description: 'Batalkan atau minta pendekatan alternatif',
+        fullText: 'Tidak, batalkan tindakan ini.',
+        isConfirmation: true
+      }
+    ]
+  }
+
+  return []
+}
+
+async function handleSelectDetectedOption(msgId: string, opt: DetectedOption) {
+  if (claudeStore.isExecuting) return
+  selectedChoiceMap.value[msgId] = opt.key
+  const textToSend = opt.isConfirmation ? opt.fullText : `${opt.badge}. ${opt.title}`
+  inputText.value = textToSend
+  await handleSendMessage()
 }
 
 async function copyMessageContent(content: string, msgId: string) {
@@ -280,6 +437,18 @@ async function copyCode(code: string, blockKey: string) {
   }
 }
 
+async function copyThinkingText(text: string, id: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    copiedIndex.value = `thinking-${id}`
+    setTimeout(() => {
+      if (copiedIndex.value === `thinking-${id}`) copiedIndex.value = null
+    }, 2000)
+  } catch (err) {
+    console.warn('Gagal menyalin penalaran:', err)
+  }
+}
+
 function applyToEditor(code: string) {
   if (workspaceStore.activeTab && workspaceStore.activeTab.tabType === 'editor') {
     workspaceStore.updateTabContent(workspaceStore.activeTab.id, code)
@@ -316,9 +485,9 @@ function getToolSummaryArg(tool: any): string {
 </script>
 
 <template>
-  <aside class="w-88 h-full flex flex-col bg-[#090d14] rounded-2xl border border-white/[0.08] select-none flex-shrink-0 text-slate-100 font-sans relative overflow-hidden shadow-sm transition-all">
+  <aside class="w-88 h-full flex flex-col bg-[#0c0a08] rounded-2xl border border-white/[0.08] select-none flex-shrink-0 text-slate-100 font-sans relative overflow-hidden shadow-sm transition-all">
     <!-- Header (Claude Warm Amber/Terracotta Accent) -->
-    <div class="h-9 px-3 border-b border-white/[0.06] flex items-center justify-between text-[11px] font-semibold bg-[#0b101b]/95 backdrop-blur-md flex-shrink-0">
+    <div class="h-9 px-3 border-b border-white/[0.06] flex items-center justify-between text-[11px] font-semibold bg-[#120d0a]/95 backdrop-blur-md flex-shrink-0">
       <div class="flex items-center gap-1.5 flex-shrink-0">
         <a
           href="https://claude.ai"
@@ -458,7 +627,7 @@ function getToolSummaryArg(tool: any): string {
         <!-- Title with Link Icon -->
         <div class="flex items-center justify-center gap-1.5 mb-1.5">
           <h2 class="text-base sm:text-lg font-bold tracking-tight text-white flex items-center justify-center gap-1.5 text-center">
-            <span class="claude-gradient-text">Claude Code Agent</span>
+            <span class="claude-gradient-text">{{ claudeStore.executionMode === 'chat' ? 'Claude Chat' : 'Claude Code Agent' }}</span>
           </h2>
           <a
             href="https://claude.ai"
@@ -473,7 +642,11 @@ function getToolSummaryArg(tool: any): string {
 
         <!-- Subtitle -->
         <p class="text-[11px] text-slate-400 text-center max-w-[270px] mx-auto leading-relaxed mb-4">
-          Agen pemrograman otonom bertenaga model Claude (Anthropic). Mendukung penalaran mendalam, arsitektur sistem, dan refactoring presisi tinggi.
+          {{
+            claudeStore.executionMode === 'chat'
+              ? 'Mode Diskusi & Tanya-Jawab Claude (Plan). Menganalisis kode dan penalaran sistem tanpa eksekusi langsung.'
+              : 'Agen pemrograman otonom bertenaga model Claude (Anthropic). Mendukung penalaran mendalam, arsitektur sistem, dan refactoring presisi tinggi.'
+          }}
         </p>
 
         <!-- Target Project Connected Badge -->
@@ -518,38 +691,107 @@ function getToolSummaryArg(tool: any): string {
             :class="[
               'p-2.5 rounded-xl max-w-[96%] leading-relaxed break-words shadow-sm transition-all w-full',
               msg.role === 'user'
-                ? 'bg-gradient-to-br from-[#c2410c] to-[#9a3412] text-white rounded-tr-xs border border-orange-400/30 text-[11px]'
-                : 'bg-[#140e0a]/90 text-slate-200 rounded-tl-xs border border-white/[0.08] text-[11px]'
+                ? 'bg-gradient-to-br from-[#9a3412] to-[#7c2d12] text-white rounded-tr-xs border border-orange-500/30 text-[11px] shadow-sm'
+                : 'bg-[#120c08]/95 text-slate-200 rounded-tl-xs border border-[#ea580c]/15 text-[11px]'
             ]"
           >
-            <!-- 1. Live Thinking Process Box -->
-            <div v-if="msg.thinking" class="mb-2 rounded-lg bg-black/40 border border-[#ea580c]/20 overflow-hidden shadow-xs">
+            <!-- 1. Modern Chat-Style Thinking Process Component -->
+            <!-- State A: Thinking Content Present -->
+            <div
+              v-if="msg.thinking"
+              class="mb-2.5 rounded-xl border transition-all duration-200 overflow-hidden shadow-xs"
+              :class="[
+                msg.isStreaming
+                  ? 'bg-[#1b110a] border-[#ea580c]/35 ring-1 ring-[#ea580c]/20 shadow-sm shadow-[#ea580c]/10'
+                  : 'bg-[#170f09] border-[#ea580c]/20 hover:border-[#ea580c]/35'
+              ]"
+            >
+              <!-- Accordion Header Bar -->
               <button
                 @click="claudeStore.toggleThinking(msg.id)"
-                class="w-full px-2 py-1 flex items-center justify-between text-[10px] text-orange-300 font-semibold bg-[#ea580c]/10 hover:bg-[#ea580c]/15 transition-all cursor-pointer"
+                class="w-full px-2.5 py-1.5 flex items-center justify-between text-[10.5px] bg-[#22140a]/80 hover:bg-[#2b190d] transition-all cursor-pointer select-none group"
+                :class="{ 'border-b border-[#ea580c]/15': msg.isThinkingExpanded }"
               >
-                <span class="flex items-center gap-1">
-                  <UIcon
-                    name="i-lucide-sparkles"
-                    class="size-3 text-[#f97316]"
-                    :class="{ 'animate-spin': msg.isStreaming }"
-                  />
-                  Claude Reasoning (Thinking)
-                  <span v-if="msg.thinkingSeconds !== undefined" class="text-[9px] font-mono text-orange-400/70 font-normal">
-                    ({{ msg.thinkingSeconds }}s)
+                <div class="flex items-center gap-2 min-w-0">
+                  <div
+                    class="size-5 rounded-md flex items-center justify-center flex-shrink-0 transition-colors"
+                    :class="msg.isStreaming ? 'bg-[#ea580c]/25 text-[#f97316] ring-1 ring-[#ea580c]/30' : 'bg-[#ea580c]/15 text-[#fb923c] group-hover:bg-[#ea580c]/25'"
+                  >
+                    <UIcon
+                      :name="msg.isStreaming ? 'i-lucide-brain' : 'i-lucide-sparkles'"
+                      class="size-3.5 text-[#fb923c]"
+                      :class="{ 'animate-pulse text-[#f97316]': msg.isStreaming }"
+                    />
+                  </div>
+                  <div class="flex items-center gap-1.5 truncate">
+                    <span
+                      class="font-medium truncate transition-colors text-orange-200/90 group-hover:text-orange-100"
+                    >
+                      {{ msg.isStreaming ? 'Claude sedang menalar...' : 'Penalaran Claude' }}
+                    </span>
+                    <span
+                      v-if="msg.thinkingSeconds !== undefined"
+                      class="text-[9px] font-mono px-1.5 py-0.2 rounded-full bg-[#ea580c]/15 text-[#fdba74] border border-[#ea580c]/25 flex-shrink-0 font-medium"
+                    >
+                      {{ msg.thinkingSeconds }}s
+                    </span>
+                  </div>
+                </div>
+
+                <div class="flex items-center gap-1.5 flex-shrink-0 text-orange-300/70 group-hover:text-orange-200">
+                  <button
+                    v-if="msg.isThinkingExpanded"
+                    @click.stop="copyThinkingText(msg.thinking, msg.id)"
+                    class="p-1 rounded hover:bg-[#ea580c]/20 text-orange-300/80 hover:text-orange-100 transition-colors cursor-pointer"
+                    title="Salin hasil penalaran"
+                  >
+                    <UIcon :name="copiedIndex === `thinking-${msg.id}` ? 'i-lucide-check' : 'i-lucide-copy'" class="size-3" />
+                  </button>
+                  <span class="text-[9px] hidden sm:inline-block opacity-80 text-orange-300/80">
+                    {{ msg.isThinkingExpanded ? 'Sembunyikan' : 'Lihat proses' }}
                   </span>
-                </span>
-                <UIcon
-                  :name="msg.isThinkingExpanded ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'"
-                  class="size-3 text-orange-400"
-                />
+                  <UIcon
+                    name="i-lucide-chevron-down"
+                    class="size-3.5 text-orange-300/80 transition-transform duration-200"
+                    :class="{ 'rotate-180': msg.isThinkingExpanded }"
+                  />
+                </div>
               </button>
+
+              <!-- Expanded Body (Full Content Display) -->
               <div
                 v-if="msg.isThinkingExpanded"
-                class="p-2 text-[10px] font-mono text-orange-100/90 whitespace-pre-wrap bg-[#100b08]/95 border-t border-[#ea580c]/15 leading-relaxed max-h-40 overflow-y-auto custom-scrollbar"
+                class="p-2.5 border-t border-[#ea580c]/15 bg-[#100905]/95 text-[10.5px] text-orange-100/90 leading-relaxed font-mono"
               >
-                {{ msg.thinking }}
-                <span v-if="msg.isStreaming" class="inline-block w-1 h-3 bg-[#f97316] animate-pulse ml-0.5 align-middle"></span>
+                <div class="pl-2.5 border-l-2 border-[#ea580c]/50 whitespace-pre-wrap break-words text-orange-100/90 selection:bg-orange-500/30">
+                  {{ msg.thinking }}
+                  <!-- Live thinking loading spinner -->
+                  <UIcon
+                    v-if="msg.isStreaming"
+                    name="i-lucide-loader-2"
+                    class="inline-block size-3 text-orange-400 animate-spin ml-1 align-middle"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <!-- State B: Live Streaming but Thinking Token hasn't arrived yet and content is empty -->
+            <div
+              v-else-if="msg.isStreaming && !msg.content && (!msg.tools || msg.tools.length === 0)"
+              class="mb-2.5 p-2 rounded-xl bg-[#1a0f08]/80 border border-orange-500/20 ring-1 ring-orange-500/10 flex items-center justify-between shadow-xs animate-pulse"
+            >
+              <div class="flex items-center gap-2 min-w-0">
+                <div class="size-5 rounded-md bg-orange-500/20 text-orange-400 flex items-center justify-center flex-shrink-0">
+                  <UIcon name="i-lucide-brain" class="size-3.5 animate-pulse text-orange-400" />
+                </div>
+                <span class="text-[10.5px] font-medium text-orange-200 truncate">
+                  Claude sedang menganalisis logika & kode...
+                </span>
+              </div>
+              <div class="flex items-center gap-1 pr-1">
+                <span class="size-1.5 rounded-full bg-orange-400 animate-bounce" style="animation-delay: 0ms"></span>
+                <span class="size-1.5 rounded-full bg-orange-400 animate-bounce" style="animation-delay: 150ms"></span>
+                <span class="size-1.5 rounded-full bg-orange-400 animate-bounce" style="animation-delay: 300ms"></span>
               </div>
             </div>
 
@@ -675,7 +917,10 @@ function getToolSummaryArg(tool: any): string {
             </div>
 
             <!-- 4. Main Markdown Content -->
-            <div v-if="msg.content" class="space-y-1.5">
+            <div v-if="msg.role === 'user' && msg.displayPrompt" class="leading-relaxed whitespace-pre-wrap break-words text-[11px]">
+              {{ msg.displayPrompt }}
+            </div>
+            <div v-else-if="msg.content" class="space-y-1.5">
               <template v-for="(block, bIdx) in parseMarkdownBlocks(msg.content)" :key="bIdx">
                 <!-- Text Block -->
                 <div v-if="block.type === 'text'" v-html="formatInlineMarkdown(block.content)" class="leading-relaxed whitespace-pre-wrap break-words text-[11px]"></div>
@@ -707,36 +952,131 @@ function getToolSummaryArg(tool: any): string {
               </template>
             </div>
 
+            <!-- 4.1. Smart Interactive Choice Cards & Actions (CLI Style Choice Cards) -->
+            <div
+              v-if="msg.role === 'assistant' && !msg.isStreaming && extractInteractiveOptions(msg.content).length > 0 && !msg.pendingQuestion"
+              class="mt-2.5 space-y-1.5 p-2 rounded-xl bg-[#160d08]/95 border border-[#ea580c]/25 shadow-xl shadow-black/50 animate-in fade-in zoom-in-98 duration-150"
+            >
+              <div class="flex items-center justify-between px-1 pb-1 border-b border-orange-500/15 text-[9.5px]">
+                <span class="text-orange-300 font-semibold flex items-center gap-1">
+                  <UIcon name="i-lucide-layout-grid" class="size-3 text-[#f97316]" />
+                  <span>Pilihan Opsi CLI Claude (Klik untuk Memilih):</span>
+                </span>
+                <span class="text-orange-400/80 font-mono text-[8.5px] bg-[#ea580c]/10 px-1.5 py-0.2 rounded border border-[#ea580c]/20">
+                  Claude Interactive Choice
+                </span>
+              </div>
+
+              <div class="grid grid-cols-1 gap-1.5 pt-1">
+                <div
+                  v-for="opt in extractInteractiveOptions(msg.content)"
+                  :key="opt.key"
+                  :class="[
+                    'p-2 rounded-lg border transition-all flex items-start justify-between gap-2',
+                    selectedChoiceMap[msg.id] === opt.key
+                      ? 'bg-orange-950/60 border-orange-500 ring-1 ring-orange-500/30'
+                      : 'bg-[#1e130c]/90 hover:bg-[#281910] border-orange-500/15 hover:border-orange-500/30'
+                  ]"
+                >
+                  <!-- Left: Badge & Text -->
+                  <div class="flex items-start gap-2 min-w-0 flex-1">
+                    <span
+                      :class="[
+                        'w-5 h-5 rounded-md font-bold text-[9.5px] flex items-center justify-center flex-shrink-0 mt-0.5 border transition-all',
+                        opt.isConfirmation && opt.key === 'y'
+                          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                          : opt.isConfirmation && opt.key === 'n'
+                          ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                          : selectedChoiceMap[msg.id] === opt.key
+                          ? 'bg-[#ea580c] text-white border-orange-400'
+                          : 'bg-[#ea580c]/15 text-orange-200 border-[#ea580c]/30'
+                      ]"
+                    >
+                      {{ opt.badge }}
+                    </span>
+
+                    <div class="min-w-0 flex-1">
+                      <div class="text-[11px] font-semibold text-slate-100 leading-tight">
+                        {{ opt.title }}
+                      </div>
+                      <div v-if="opt.description" class="text-[9.5px] text-slate-400 leading-snug mt-0.5 whitespace-pre-line">
+                        {{ opt.description }}
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Right: Action Buttons -->
+                  <div class="flex items-center gap-1 flex-shrink-0 mt-0.5">
+                    <button
+                      @click="handleSelectDetectedOption(msg.id, opt)"
+                      :disabled="claudeStore.isExecuting"
+                      :class="[
+                        'px-2 py-1 rounded-md text-[9.5px] font-semibold transition-all cursor-pointer flex items-center gap-1 active:scale-95 disabled:opacity-40',
+                        opt.isConfirmation && opt.key === 'y'
+                          ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs'
+                          : opt.isConfirmation && opt.key === 'n'
+                          ? 'bg-rose-600/30 hover:bg-rose-600/50 text-rose-200 border border-rose-500/40'
+                          : selectedChoiceMap[msg.id] === opt.key
+                          ? 'bg-[#ea580c] text-white shadow-xs'
+                          : 'bg-[#ea580c]/20 hover:bg-[#ea580c] text-orange-200 hover:text-white border border-[#ea580c]/30'
+                      ]"
+                      :title="`Pilih ${opt.title} dan kirim ke Claude CLI`"
+                    >
+                      <UIcon :name="selectedChoiceMap[msg.id] === opt.key ? 'i-lucide-check' : 'i-lucide-arrow-right'" class="size-3" />
+                      <span>{{ selectedChoiceMap[msg.id] === opt.key ? 'Dipilih' : 'Pilih' }}</span>
+                    </button>
+
+                    <button
+                      @click="handleEditPrompt(opt.isConfirmation ? opt.fullText : `${opt.badge}. ${opt.title}`)"
+                      class="p-1 rounded-md bg-white/[0.04] hover:bg-white/[0.1] text-slate-400 hover:text-slate-200 border border-white/5 transition-colors cursor-pointer"
+                      title="Edit pilihan ini di kolom prompt"
+                    >
+                      <UIcon name="i-lucide-pencil" class="size-2.5" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <!-- 5. Empty State Fallback -->
             <div v-else-if="!msg.isStreaming && !msg.thinking && (!msg.tools || msg.tools.length === 0) && !msg.pendingQuestion && msg.role === 'assistant'" class="text-[10px] text-slate-400 italic py-1">
               (Tidak ada respons dari model Claude yang dipilih. Silakan coba pilih model lain dari daftar atau kirim ulang pesan).
             </div>
 
             <!-- 6. Streaming Indicator & Live Status Pill -->
-            <div v-if="msg.isStreaming" class="flex items-center gap-1.5 pt-1 text-[9.5px] text-[#f97316] font-mono">
-              <span class="inline-block size-1.5 rounded-full bg-[#f97316] animate-ping"></span>
-              <span class="text-orange-300 font-medium">{{ msg.activeStatusText || 'Mengetik respons...' }}</span>
+            <div
+              v-if="msg.isStreaming && (msg.content || (msg.tools && msg.tools.length > 0))"
+              class="flex items-center gap-2 pt-1.5 text-[10px] text-orange-300/80"
+            >
+              <div class="flex items-center gap-1">
+                <span class="size-1.5 rounded-full bg-orange-400 animate-bounce" style="animation-delay: 0ms"></span>
+                <span class="size-1.5 rounded-full bg-orange-400 animate-bounce" style="animation-delay: 150ms"></span>
+                <span class="size-1.5 rounded-full bg-orange-400 animate-bounce" style="animation-delay: 300ms"></span>
+              </div>
+              <span class="text-orange-200 font-medium tracking-tight">
+                {{ msg.activeStatusText || 'Mengetik respons...' }}
+              </span>
             </div>
 
             <!-- 7. Pending Approval Card -->
-            <div v-if="msg.pendingApproval" class="mt-2 p-2 rounded-lg bg-amber-500/10 border border-amber-500/30">
-              <div class="text-[10px] font-semibold text-amber-300 flex items-center gap-1 mb-0.5">
+            <div v-if="msg.pendingApproval" class="mt-2 p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30">
+              <div class="text-[10px] font-semibold text-amber-300 flex items-center gap-1 mb-1">
                 <UIcon name="i-lucide-shield-alert" class="size-3 text-amber-400" />
                 Izin Diperlukan
               </div>
               <p class="text-[9.5px] text-slate-300 mb-1.5 leading-snug">
                 {{ msg.pendingApproval.description }}
               </p>
-              <div class="flex items-center gap-1.5">
+              <div class="flex items-center gap-2 pt-0.5">
                 <button
                   @click="claudeStore.approveAction(msg.id, true)"
-                  class="px-2 py-0.5 rounded bg-orange-600 hover:bg-orange-500 text-white font-semibold text-[9px] shadow-xs cursor-pointer transition-all"
+                  class="px-3.5 py-1 rounded-full bg-orange-600 hover:bg-orange-500 text-white font-semibold text-[9.5px] shadow-xs cursor-pointer transition-all active:scale-95"
                 >
                   Setujui
                 </button>
                 <button
                   @click="claudeStore.approveAction(msg.id, false)"
-                  class="px-2 py-0.5 rounded bg-white/10 hover:bg-white/15 text-slate-300 text-[9px] cursor-pointer transition-all"
+                  class="px-3.5 py-1 rounded-full bg-white/10 hover:bg-white/15 text-slate-300 text-[9.5px] cursor-pointer transition-all active:scale-95"
                 >
                   Tolak
                 </button>
@@ -827,7 +1167,7 @@ function getToolSummaryArg(tool: any): string {
     </div>
 
     <!-- Input Box -->
-    <div class="p-2.5 bg-[#090d14] border-t border-white/[0.06] flex-shrink-0 relative z-20">
+    <div class="p-2.5 bg-[#0c0a08] border-t border-white/[0.06] flex-shrink-0 relative z-20">
       <div class="bg-[#140e0a]/90 border border-white/[0.08] hover:border-white/[0.14] focus-within:border-[#ea580c]/50 focus-within:ring-1 focus-within:ring-[#ea580c]/25 rounded-2xl p-2.5 shadow-xl transition-all duration-200 space-y-1.5">
         <!-- Hidden Image Input File Picker -->
         <input

@@ -22,7 +22,7 @@ import { updateService } from './updater/updateService'
 let primaryWindow: BrowserWindow | null = null
 const activeBrowserWindows = new Set<BrowserWindow>()
 const aiAgentService = new AiAgentService()
-const openCodeCliService = new OpenCodeCliService(aiAgentService)
+const openCodeCliService = new OpenCodeCliService()
 const claudeCliService = new ClaudeCliService(aiAgentService)
 const gitService = new GitService(aiAgentService)
 
@@ -135,7 +135,7 @@ async function collectWorkspaceFilesWithRipgrep(rootPath: string, maxFiles = 500
       if (isResolved) return
       isResolved = true
       if (!child.killed) {
-        try { child.kill() } catch {}
+        try { child.kill() } catch { }
       }
       workspaceFilesCache.set(rootPath, { timestamp: Date.now(), files: items })
       resolveResult(items)
@@ -441,21 +441,21 @@ function registerIpcHandlers(): void {
       const win = BrowserWindow.fromWebContents(event.sender) || primaryWindow
       const result = win
         ? await dialog.showOpenDialog(win, {
-            title: 'Pilih File Aplikasi Executable (.exe)',
-            filters: [
-              { name: 'Aplikasi Windows (*.exe)', extensions: ['exe'] },
-              { name: 'Semua Berkas (*.*)', extensions: ['*'] }
-            ],
-            properties: ['openFile']
-          })
+          title: 'Pilih File Aplikasi Executable (.exe)',
+          filters: [
+            { name: 'Aplikasi Windows (*.exe)', extensions: ['exe'] },
+            { name: 'Semua Berkas (*.*)', extensions: ['*'] }
+          ],
+          properties: ['openFile']
+        })
         : await dialog.showOpenDialog({
-            title: 'Pilih File Aplikasi Executable (.exe)',
-            filters: [
-              { name: 'Aplikasi Windows (*.exe)', extensions: ['exe'] },
-              { name: 'Semua Berkas (*.*)', extensions: ['*'] }
-            ],
-            properties: ['openFile']
-          })
+          title: 'Pilih File Aplikasi Executable (.exe)',
+          filters: [
+            { name: 'Aplikasi Windows (*.exe)', extensions: ['exe'] },
+            { name: 'Semua Berkas (*.*)', extensions: ['*'] }
+          ],
+          properties: ['openFile']
+        })
 
       if (result.canceled || result.filePaths.length === 0) {
         return { canceled: true }
@@ -544,7 +544,7 @@ function registerIpcHandlers(): void {
       } else {
         try {
           procInfo.childProcess.kill('SIGKILL')
-        } catch {}
+        } catch { }
       }
 
       runningAppProcesses.delete(keyToStop)
@@ -566,13 +566,13 @@ function registerIpcHandlers(): void {
       const windowTarget = BrowserWindow.fromWebContents(event.sender) || primaryWindow
       const openResult = windowTarget
         ? await dialog.showOpenDialog(windowTarget, {
-            title: 'Buka Folder Project',
-            properties: ['openDirectory']
-          })
+          title: 'Buka Folder Project',
+          properties: ['openDirectory']
+        })
         : await dialog.showOpenDialog({
-            title: 'Buka Folder Project',
-            properties: ['openDirectory']
-          })
+          title: 'Buka Folder Project',
+          properties: ['openDirectory']
+        })
 
       if (openResult.canceled || openResult.filePaths.length === 0) {
         return { canceled: true }
@@ -634,10 +634,10 @@ function registerIpcHandlers(): void {
       }
       const cleanBase64 = base64Data.replace(/^data:image\/\w+;base64,/, '')
       const buffer = Buffer.from(cleanBase64, 'base64')
-      
+
       const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_')
       let targetPath = join(makaryaDir, safeName)
-      
+
       if (existsSync(targetPath)) {
         const parsed = parse(safeName)
         let idx = 1
@@ -832,9 +832,13 @@ function registerIpcHandlers(): void {
     return openCodeCliService.getDiscoveredModels()
   })
 
-  // OpenCode CLI Sessions (List, Load, Delete)
-  ipcMain.handle('opencode:session-list', async () => {
-    return openCodeCliService.listSessions()
+  ipcMain.handle('opencode:get-config-path', async () => {
+    return openCodeCliService.getConfigPath()
+  })
+
+  // OpenCode CLI Sessions (List, Load, Delete - Native /session data)
+  ipcMain.handle('opencode:session-list', async (_event, projectRoot?: string) => {
+    return openCodeCliService.listSessions(projectRoot)
   })
 
   ipcMain.handle('opencode:session-load', async (_event, sessionId: string) => {
@@ -865,9 +869,13 @@ function registerIpcHandlers(): void {
     return claudeCliService.getDiscoveredModels()
   })
 
-  // Claude CLI Sessions (List, Load, Delete)
-  ipcMain.handle('claude:session-list', async () => {
-    return claudeCliService.listSessions()
+  ipcMain.handle('claude:get-config-path', async () => {
+    return claudeCliService.getConfigPath()
+  })
+
+  // Claude CLI Sessions (List, Load, Delete - Native /resume data)
+  ipcMain.handle('claude:session-list', async (_event, projectRoot?: string) => {
+    return claudeCliService.listSessions(projectRoot)
   })
 
   ipcMain.handle('claude:session-load', async (_event, sessionId: string) => {

@@ -42,31 +42,69 @@ export interface FindInFilesResult {
 }
 
 /**
- * Resolve native ripgrep binary without triggering CommonJS/ESM module conflicts
+ * Resolve native ripgrep binary without triggering CommonJS/ESM module conflicts.
+ * Supports both development and production packaged (app.asar.unpacked) modes.
  */
 export function getRipgrepBinaryPath(): string | null {
   const binaryName = process.platform === 'win32' ? 'rg.exe' : 'rg'
-  const platformPkg = `@vscode/ripgrep-${process.platform}-${process.arch}`
+  const platformPkg = `ripgrep-${process.platform}-${process.arch}`
+  const resourcesPath = (process as any).resourcesPath || ''
 
   const candidatePaths = [
-    join(process.cwd(), 'node_modules', '@vscode', `ripgrep-${process.platform}-${process.arch}`, 'bin', binaryName),
+    // 1. Production packaged resources unpacked paths
+    join(resourcesPath, 'app.asar.unpacked', 'node_modules', '@vscode', platformPkg, 'bin', binaryName),
+    join(resourcesPath, 'app.asar.unpacked', 'node_modules', '@vscode', 'ripgrep', 'bin', binaryName),
+    join(resourcesPath, 'app.asar.unpacked', 'node_modules', platformPkg, 'bin', binaryName),
+    join(resourcesPath, 'bin', binaryName),
+
+    // 2. Dev mode relative to cwd
+    join(process.cwd(), 'node_modules', '@vscode', platformPkg, 'bin', binaryName),
+    join(process.cwd(), 'node_modules', '@vscode', 'ripgrep', 'bin', binaryName),
     join(process.cwd(), 'node_modules', platformPkg, 'bin', binaryName),
-    join(__dirname, '..', '..', 'node_modules', '@vscode', `ripgrep-${process.platform}-${process.arch}`, 'bin', binaryName),
-    join(__dirname, '..', '..', 'node_modules', platformPkg, 'bin', binaryName),
-    join((process as any).resourcesPath || '', 'app.asar.unpacked', 'node_modules', '@vscode', `ripgrep-${process.platform}-${process.arch}`, 'bin', binaryName)
+
+    // 3. Dev mode relative to __dirname
+    join(__dirname, '..', '..', 'node_modules', '@vscode', platformPkg, 'bin', binaryName),
+    join(__dirname, '..', '..', 'node_modules', '@vscode', 'ripgrep', 'bin', binaryName),
+    join(__dirname, '..', '..', 'node_modules', platformPkg, 'bin', binaryName)
   ]
 
   for (const candidate of candidatePaths) {
-    if (existsSync(candidate)) {
+    if (candidate && existsSync(candidate)) {
       return candidate
     }
   }
 
   try {
-    return require.resolve(`${platformPkg}/bin/${binaryName}`)
+    const resolved = require.resolve(`@vscode/${platformPkg}/bin/${binaryName}`)
+    if (resolved.includes('app.asar') && !resolved.includes('app.asar.unpacked')) {
+      const unpacked = resolved.replace('app.asar', 'app.asar.unpacked')
+      if (existsSync(unpacked)) {
+        return unpacked
+      }
+    }
+    if (existsSync(resolved)) {
+      return resolved
+    }
   } catch {
-    return null
+    // ignore
   }
+
+  try {
+    const resolvedGeneric = require.resolve(`@vscode/ripgrep/bin/${binaryName}`)
+    if (resolvedGeneric.includes('app.asar') && !resolvedGeneric.includes('app.asar.unpacked')) {
+      const unpacked = resolvedGeneric.replace('app.asar', 'app.asar.unpacked')
+      if (existsSync(unpacked)) {
+        return unpacked
+      }
+    }
+    if (existsSync(resolvedGeneric)) {
+      return resolvedGeneric
+    }
+  } catch {
+    // ignore
+  }
+
+  return null
 }
 
 const DEFAULT_EXCLUDE_GLOBS = [

@@ -67,15 +67,15 @@ async function deleteSession(sessionId: string) {
 </script>
 
 <template>
-  <!-- Full Overlay Matching Makarya AI Agent Sessions Modal -->
+  <!-- Full Overlay Matching Matte Black Sessions Modal -->
   <div
     v-if="isOpen"
-    class="absolute inset-0 bg-[#070b13]/92 backdrop-blur-md z-50 flex flex-col p-3.5 space-y-3 animate-in fade-in zoom-in-95 duration-150 select-none font-sans"
+    class="absolute inset-0 bg-[#090b0e]/95 backdrop-blur-md z-50 flex flex-col p-3.5 space-y-3 animate-in fade-in zoom-in-95 duration-150 select-none font-sans"
   >
     <!-- Modal Header -->
     <div class="flex items-center justify-between pb-2 border-b border-white/[0.08] flex-shrink-0">
       <div class="flex items-center gap-2">
-        <div class="w-6 h-6 rounded-lg bg-[#42b883]/15 border border-[#42b883]/30 flex items-center justify-center text-[#42b883]">
+        <div class="w-6 h-6 rounded-lg bg-white/10 border border-white/20 flex items-center justify-center text-slate-200">
           <UIcon name="i-lucide-history" class="size-3.5" />
         </div>
         <div>
@@ -95,9 +95,9 @@ async function deleteSession(sessionId: string) {
     <!-- Action: Mulai Obrolan Baru -->
     <button
       @click="handleCreateNew"
-      class="w-full py-2 px-3 rounded-xl bg-[#42b883] hover:bg-[#34d399] text-[#090d14] font-semibold text-xs flex items-center justify-center gap-2 shadow-lg shadow-[#42b883]/25 active:scale-98 transition-all cursor-pointer flex-shrink-0"
+      class="w-full py-2 px-3 rounded-xl bg-zinc-200 hover:bg-white text-zinc-950 font-semibold text-xs flex items-center justify-center gap-2 shadow-md shadow-white/5 active:scale-98 transition-all cursor-pointer flex-shrink-0"
     >
-      <UIcon name="i-lucide-plus-circle" class="size-4 text-[#090d14]" />
+      <UIcon name="i-lucide-plus-circle" class="size-4 text-zinc-950" />
       <span>Mulai Obrolan Baru</span>
     </button>
 
@@ -109,7 +109,7 @@ async function deleteSession(sessionId: string) {
         v-model="searchQuery"
         type="text"
         placeholder="Cari sesi obrolan..."
-        class="w-full bg-[#080d16] border border-white/[0.08] focus:border-[#42b883]/50 focus:ring-1 focus:ring-[#42b883]/20 rounded-xl pl-7 pr-7 py-1.5 text-[11px] text-slate-200 placeholder:text-slate-500 outline-none transition-all font-sans"
+        class="w-full bg-[#111317] border border-white/[0.08] focus:border-white/30 focus:ring-1 focus:ring-white/15 rounded-xl pl-7 pr-7 py-1.5 text-[11px] text-slate-200 placeholder:text-slate-500 outline-none transition-all font-sans"
       />
       <button
         v-if="searchQuery"
@@ -128,17 +128,17 @@ async function deleteSession(sessionId: string) {
         @click="chooseSession(session)"
         class="p-2.5 rounded-xl border transition-all cursor-pointer flex flex-col gap-1.5 group relative"
         :class="session.id === openCodeStore.activeSessionId
-          ? 'bg-[#42b883]/15 border-[#42b883]/45 shadow-sm shadow-[#42b883]/10'
-          : 'bg-[#0f1624]/60 hover:bg-[#131d2e] border-white/[0.06] hover:border-white/[0.12]'"
+          ? 'bg-white/15 border-white/40 shadow-sm ring-1 ring-white/20'
+          : 'bg-[#111317] hover:bg-[#181b22] border-white/[0.06] hover:border-white/[0.15]'"
       >
         <!-- Title & Active Badge & Delete Button -->
         <div class="flex items-center justify-between gap-1.5">
           <div class="flex items-center gap-1.5 min-w-0 pr-1">
             <span
               v-if="session.id === openCodeStore.activeSessionId"
-              class="w-1.5 h-1.5 rounded-full bg-[#42b883] animate-pulse flex-shrink-0"
+              class="w-1.5 h-1.5 rounded-full bg-white animate-pulse flex-shrink-0"
             ></span>
-            <span class="text-xs font-semibold text-slate-100 truncate group-hover:text-[#42b883] transition-colors">
+            <span class="text-xs font-semibold text-slate-100 truncate group-hover:text-white transition-colors">
               {{ session.title }}
             </span>
           </div>
@@ -146,7 +146,7 @@ async function deleteSession(sessionId: string) {
           <div class="flex items-center gap-1 flex-shrink-0">
             <span
               v-if="session.id === openCodeStore.activeSessionId"
-              class="text-[9px] px-1.5 py-0.5 rounded-full bg-[#42b883]/20 text-[#42b883] font-semibold"
+              class="text-[9px] px-1.5 py-0.5 rounded-full bg-white/20 text-white font-semibold"
             >
               Aktif
             </span>
@@ -185,8 +185,8 @@ async function deleteSession(sessionId: string) {
         <p class="text-xs font-medium text-slate-400">
           {{ searchQuery ? 'Sesi obrolan tidak ditemukan' : 'Belum ada riwayat sesi obrolan' }}
         </p>
-        <p class="text-[10px] text-slate-500 max-w-[200px]">
-          Sesi obrolan akan otomatis tersimpan di SQLite saat Anda mulai mengirim pesan.
+        <p class="text-[10px] text-slate-500 max-w-[220px]">
+          Riwayat sesi OpenCode otomatis disinkronkan langsung dari OpenCode CLI (/session).
         </p>
       </div>
     </div>
@@ -201,10 +201,10 @@ async function deleteSession(sessionId: string) {
   background: transparent;
 }
 .custom-scroll::-webkit-scrollbar-thumb {
-  background: rgba(66, 184, 131, 0.25);
+  background: rgba(255, 255, 255, 0.18);
   border-radius: 4px;
 }
 .custom-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(66, 184, 131, 0.45);
+  background: rgba(255, 255, 255, 0.32);
 }
 </style>

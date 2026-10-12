@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { useWorkspaceStore } from './workspaceStore'
 
 export interface OpenCodeToolCall {
   id: string
@@ -27,10 +28,12 @@ export interface OpenCodeMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
   content: string
+  displayPrompt?: string
   timestamp: number
   isStreaming?: boolean
   thinking?: string
   isThinkingExpanded?: boolean
+  userToggledThinking?: boolean
   thinkingSeconds?: number
   activeStatusText?: string
   tools?: OpenCodeToolCall[]
@@ -65,39 +68,24 @@ export interface OpenCodeSessionItem {
   isPinned?: boolean
 }
 
-export const DEFAULT_OPENCODE_MODELS: OpenCodeModelItem[] = [
-  { id: 'Antigravity', name: 'Antigravity router', provider: 'Antigravity', category: 'Recent', isFree: true },
-  { id: 'OpenCode', name: 'Big Pickle', provider: 'OpenCode Zen', category: 'Recent', isFree: true },
-  { id: 'ag/gemini-3.8-flash', name: 'Gemini 3.8 Flash', provider: 'Antigravity', category: 'Antigravity', isFree: true },
-  { id: 'ag/gemini-3.7-flash-medium', name: 'Gemini 3.7 Flash Medium', provider: 'Antigravity', category: 'Antigravity', isFree: true },
-  { id: 'ag/claude-sonnet-4-6', name: 'Claude Sonnet 4.6', provider: 'Antigravity', category: 'Antigravity', isFree: false },
-  { id: 'exo-free', name: 'Exo Free', provider: 'OpenCode Zen', category: 'OpenCode Zen', isFree: true },
-  { id: 'fledge-alpha-free', name: 'Fledge Alpha Free', provider: 'OpenCode Zen', category: 'OpenCode Zen', isFree: true },
-  { id: 'ling-3.1-flash-free', name: 'Ling 3.1 Flash Free', provider: 'OpenCode Zen', category: 'OpenCode Zen', isFree: true },
-  { id: 'longcat-2.5-preview-free', name: 'LongCat 2.5 Preview Free', provider: 'OpenCode Zen', category: 'OpenCode Zen', isFree: true },
-  { id: 'space-bunny-free', name: 'Space Bunny Free', provider: 'OpenCode Zen', category: 'OpenCode Zen', isFree: true },
-  { id: 'mimo-v2.6-flash-free', name: 'MiMo-V2.6-Flash Free', provider: 'OpenCode Zen', category: 'OpenCode Zen', isFree: true },
-  { id: 'muse-spark-1.3-contributor-free', name: 'Muse Spark 1.3 Free', provider: 'OpenCode Zen', category: 'OpenCode Zen', isFree: true },
-  { id: 'ling-3.0-flash-fin-free', name: 'Ling 3.0 Flash Fin Free', provider: 'OpenCode Zen', category: 'OpenCode Zen', isFree: true },
-  { id: 'nemotron-3.5-lightning-free', name: 'Nemotron 3.5 Lightning Free', provider: 'OpenCode Zen', category: 'OpenCode Zen', isFree: true },
-  { id: 'nemotron-3-ultra-free', name: 'Nemotron 3 Ultra Free', provider: 'OpenCode Zen', category: 'OpenCode Zen', isFree: true }
-]
+export const DEFAULT_OPENCODE_MODELS: OpenCodeModelItem[] = []
 
 export const useOpenCodeStore = defineStore('openCodeStore', () => {
   const isConnected = ref<boolean>(true)
   const isExecuting = ref<boolean>(false)
-  const currentModel = ref<string>('Antigravity')
-  const models = ref<OpenCodeModelItem[]>([...DEFAULT_OPENCODE_MODELS])
-  const availableModels = ref<string[]>([...DEFAULT_OPENCODE_MODELS.map((m) => m.id)])
+  const currentModel = ref<string>('')
+  const models = ref<OpenCodeModelItem[]>([])
+  const availableModels = ref<string[]>([])
+  const isLoadingModels = ref<boolean>(false)
   const executionMode = ref<'agent' | 'chat' | 'plan'>('agent')
 
   const currentModelItem = computed<OpenCodeModelItem>(() => {
     return (
       models.value.find((m) => m.id === currentModel.value || m.name === currentModel.value) || {
-        id: currentModel.value,
-        name: currentModel.value,
-        provider: 'OpenCode Zen',
-        category: 'Recent',
+        id: currentModel.value || 'Default',
+        name: currentModel.value || 'Pilih Model',
+        provider: 'OpenCode',
+        category: 'Custom Model',
         isFree: true
       }
     )
@@ -137,51 +125,35 @@ export const useOpenCodeStore = defineStore('openCodeStore', () => {
   }
 
   async function loadAvailableModels() {
+    isLoadingModels.value = true
     try {
       if (window.makaryaAPI?.fetchOpenCodeModels) {
         const discovered = await window.makaryaAPI.fetchOpenCodeModels()
         if (Array.isArray(discovered) && discovered.length > 0) {
-          models.value = discovered
-          availableModels.value = discovered.map((m) => m.id)
+          const cleanList = discovered.filter(
+            (m) =>
+              !m.id.toLowerCase().includes('9router') &&
+              !(m.provider && m.provider.toLowerCase().includes('9router')) &&
+              !(m.category && m.category.toLowerCase().includes('9router'))
+          )
+          models.value = cleanList
+          availableModels.value = cleanList.map((m) => m.id)
 
-          // Ensure currentModel is valid
-          if (!models.value.some((m) => m.id === currentModel.value)) {
-            const defaultMdl =
-              models.value.find((m) => m.id === 'Antigravity' || m.id.includes('Antigravity')) ||
-              models.value[0]
-            if (defaultMdl) {
-              currentModel.value = defaultMdl.id
-            }
+          // Ensure currentModel is valid and not 9router
+          if (!models.value.some((m) => m.id === currentModel.value) || currentModel.value.toLowerCase().includes('9router')) {
+            currentModel.value = models.value[0]?.id || ''
           }
           return
         }
       }
-
-      if (window.makaryaAPI?.fetchAvailableModels) {
-        const fetched = await window.makaryaAPI.fetchAvailableModels()
-        if (Array.isArray(fetched) && fetched.length > 0) {
-          const dynamicModels: OpenCodeModelItem[] = []
-          for (const item of fetched) {
-            const modelId = typeof item === 'string' ? item : item.id || item.name
-            if (modelId && !dynamicModels.some((m) => m.id === modelId)) {
-              const cleanName = modelId.split('/').pop() || modelId
-              dynamicModels.push({
-                id: modelId,
-                name: cleanName,
-                provider: modelId.includes('/') ? modelId.split('/')[0] : '9Router',
-                category: modelId === 'Antigravity' ? 'Recent' : '9Router Gateway',
-                isFree: true
-              })
-            }
-          }
-          if (dynamicModels.length > 0) {
-            models.value = dynamicModels
-            availableModels.value = dynamicModels.map((m) => m.id)
-          }
-        }
-      }
+      models.value = []
+      availableModels.value = []
     } catch (err) {
-      console.warn('Gagal memuat model OpenCode & 9Router:', err)
+      console.warn('Gagal memuat model OpenCode dari config:', err)
+      models.value = []
+      availableModels.value = []
+    } finally {
+      isLoadingModels.value = false
     }
   }
 
@@ -215,6 +187,10 @@ export const useOpenCodeStore = defineStore('openCodeStore', () => {
       if (data.requestId !== currentRequestId) return
       const targetMsg = messages.value.find((m) => m.id === currentRequestId)
       if (targetMsg) {
+        // Otomatis menutup box penalaran saat token respon/jawaban utama mulai ditulis
+        if (targetMsg.thinking && targetMsg.isThinkingExpanded && !targetMsg.userToggledThinking) {
+          targetMsg.isThinkingExpanded = false
+        }
         targetMsg.content += data.deltaContent
         targetMsg.activeStatusText = 'Menulis respons...'
         syncCurrentSessionToHistory()
@@ -227,7 +203,10 @@ export const useOpenCodeStore = defineStore('openCodeStore', () => {
       const targetMsg = messages.value.find((m) => m.id === currentRequestId)
       if (targetMsg) {
         targetMsg.thinking = (targetMsg.thinking || '') + data.deltaThought
-        targetMsg.isThinkingExpanded = true
+        // Buka otomatis saat proses penalaran sedang berjalan
+        if (!targetMsg.userToggledThinking) {
+          targetMsg.isThinkingExpanded = true
+        }
         targetMsg.activeStatusText = 'Sedang menganalisis logika...'
         syncCurrentSessionToHistory()
       }
@@ -294,6 +273,10 @@ export const useOpenCodeStore = defineStore('openCodeStore', () => {
       if (targetMsg) {
         targetMsg.isStreaming = false
         targetMsg.activeStatusText = undefined
+        // Otomatis menutup penalaran setelah proses selesai
+        if (!targetMsg.userToggledThinking) {
+          targetMsg.isThinkingExpanded = false
+        }
         if (data.fullContent && !targetMsg.content.trim()) {
           targetMsg.content = data.fullContent
         }
@@ -353,24 +336,35 @@ export const useOpenCodeStore = defineStore('openCodeStore', () => {
       isExecuting.value = false
       syncCurrentSessionToHistory()
     })
+
+    // Dynamic Session Link from OpenCode CLI
+    if (window.makaryaAPI?.onAgentSessionLinked) {
+      window.makaryaAPI.onAgentSessionLinked((data: { clientSessionId: string; openCodeSessionId: string }) => {
+        if (data.openCodeSessionId) {
+          activeSessionId.value = data.openCodeSessionId
+        }
+      })
+    }
   }
 
-  async function sendPrompt(text: string, projectRoot?: string) {
+  async function sendPrompt(text: string, projectRoot?: string, displayPrompt?: string) {
     const trimmed = text.trim()
     if (!trimmed || isExecuting.value) return
 
     currentActiveProjectRoot = projectRoot
     initListeners()
 
-    // 1. Add User Message
+    // 1. Add User Message (storing full prompt with code/context for the AI in content, with displayPrompt for UI bubble)
     const userMsg = addMessage({
       role: 'user',
-      content: trimmed
+      content: trimmed,
+      displayPrompt: displayPrompt && displayPrompt !== trimmed ? displayPrompt : undefined
     })
 
     // Update Session Title if it's default
     if (activeSessionTitle.value.startsWith('New session') || activeSessionTitle.value.startsWith('Sesi Baru')) {
-      const cleanSummary = trimmed.split('\n')[0].replace(/\[.*?\]/g, '').trim()
+      const summaryText = displayPrompt || trimmed
+      const cleanSummary = summaryText.split('\n')[0].replace(/\[.*?\]/g, '').trim()
       const newTitle = cleanSummary.length > 40 ? cleanSummary.slice(0, 40) + '...' : cleanSummary || 'OpenCode Session'
       activeSessionTitle.value = newTitle
 
@@ -392,7 +386,10 @@ export const useOpenCodeStore = defineStore('openCodeStore', () => {
       isStreaming: true,
       thinking: '',
       isThinkingExpanded: true,
-      activeStatusText: 'Menghubungkan ke OpenCode Agent Engine...'
+      activeStatusText:
+        executionMode.value === 'chat' || executionMode.value === 'plan'
+          ? 'Menghubungkan ke OpenCode Plan Engine (Chat)...'
+          : 'Menghubungkan ke OpenCode Build Engine (Agent)...'
     })
     assistantMsg.id = reqId
 
@@ -407,15 +404,11 @@ export const useOpenCodeStore = defineStore('openCodeStore', () => {
         content: m.content
       }))
 
-    historyPayload.push({
-      role: 'user',
-      content: trimmed
-    })
-
     try {
       if (window.makaryaAPI?.startOpenCodeStream) {
         await window.makaryaAPI.startOpenCodeStream({
           requestId: reqId,
+          sessionId: activeSessionId.value,
           model: currentModel.value,
           messages: historyPayload,
           projectRoot: projectRoot || undefined,
@@ -477,34 +470,70 @@ export const useOpenCodeStore = defineStore('openCodeStore', () => {
     syncCurrentSessionToHistory()
   }
 
-  async function loadSessions() {
+  async function loadSessions(projectRoot?: string) {
     isLoadingSessions.value = true
     try {
+      const workspaceStore = useWorkspaceStore()
+      const effectiveRoot =
+        projectRoot ||
+        currentActiveProjectRoot ||
+        workspaceStore.getEffectiveProjectRoot() ||
+        workspaceStore.activeRootPath ||
+        workspaceStore.workspaceRoots[0]?.path
+
       const sessionList: OpenCodeSessionItem[] = []
 
-      // 1. Fetch from SQLite database if available
+      // 1. Fetch native OpenCode CLI sessions (/session -> opencode session list)
+      if (window.makaryaAPI?.fetchOpenCodeSessions) {
+        try {
+          const cliSessions = await window.makaryaAPI.fetchOpenCodeSessions(effectiveRoot)
+          if (Array.isArray(cliSessions) && cliSessions.length > 0) {
+            for (const s of cliSessions) {
+              sessionList.push({
+                id: s.id,
+                title: s.title || `Session ${s.id.slice(0, 8)}`,
+                updated: s.updated,
+                dateGroup: s.dateGroup || getDateGroup(s.timestamp),
+                timestamp: s.timestamp || Date.now(),
+                updatedAt: (s as any).updatedAt || (s.timestamp ? new Date(s.timestamp).toISOString() : undefined),
+                lastMessage: (s as any).lastMessage || s.subtitle || 'Percakapan OpenCode CLI',
+                subtitle: s.subtitle || (s as any).lastMessage || 'Percakapan OpenCode CLI',
+                messageCount: (s as any).messageCount || 1,
+                model: (s as any).model || currentModel.value,
+                isPinned: s.isPinned
+              })
+            }
+          }
+        } catch (cliErr) {
+          console.warn('Gagal memuat sesi native OpenCode CLI:', cliErr)
+        }
+      }
+
+      // 2. Fetch from SQLite database if available as fallback
       if (window.makaryaAPI?.dbGetChatSessions) {
         const dbSessions = await window.makaryaAPI.dbGetChatSessions()
         if (Array.isArray(dbSessions)) {
           for (const s of dbSessions) {
             const rawId = s.id.startsWith('opencode_') ? s.id.replace('opencode_', '') : s.id
-            sessionList.push({
-              id: rawId,
-              title: s.title || `Session ${rawId}`,
-              updated: s.updatedAt ? new Date(s.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : undefined,
-              dateGroup: getDateGroup(s.updatedAt || s.createdAt),
-              timestamp: s.updatedAt ? new Date(s.updatedAt).getTime() : Date.now(),
-              updatedAt: s.updatedAt || s.createdAt,
-              lastMessage: s.lastMessage || 'Percakapan tersimpan',
-              subtitle: s.lastMessage || 'Percakapan tersimpan',
-              messageCount: s.messageCount || 1,
-              model: s.model || currentModel.value
-            })
+            if (!sessionList.some((item) => item.id === rawId || item.id === s.id)) {
+              sessionList.push({
+                id: rawId,
+                title: s.title || `Session ${rawId}`,
+                updated: s.updatedAt ? new Date(s.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : undefined,
+                dateGroup: getDateGroup(s.updatedAt || s.createdAt),
+                timestamp: s.updatedAt ? new Date(s.updatedAt).getTime() : Date.now(),
+                updatedAt: s.updatedAt || s.createdAt,
+                lastMessage: s.lastMessage || 'Percakapan tersimpan',
+                subtitle: s.lastMessage || 'Percakapan tersimpan',
+                messageCount: s.messageCount || 1,
+                model: s.model || currentModel.value
+              })
+            }
           }
         }
       }
 
-      // 2. Merge in-memory sessions that might not yet be in SQLite
+      // 3. Merge in-memory sessions that might not yet be in SQLite
       for (const [sId, msgs] of Object.entries(sessionHistoryMap.value)) {
         if (!sessionList.some((item) => item.id === sId)) {
           const firstUserMsg = msgs.find((m) => m.role === 'user')
@@ -525,8 +554,8 @@ export const useOpenCodeStore = defineStore('openCodeStore', () => {
         }
       }
 
-      // 3. Ensure active session is present
-      if (activeSessionId.value && !sessionList.some((s) => s.id === activeSessionId.value)) {
+      // 4. Ensure active session is present if it has messages
+      if (activeSessionId.value && messages.value.length > 0 && !sessionList.some((s) => s.id === activeSessionId.value)) {
         const lastMsg = messages.value[messages.value.length - 1]
         sessionList.unshift({
           id: activeSessionId.value,
@@ -575,10 +604,10 @@ export const useOpenCodeStore = defineStore('openCodeStore', () => {
     sessions.value.unshift({
       id: newId,
       title: newTitle,
-      updated: 'Just now',
-      dateGroup: 'TODAY',
+      updated: 'Baru saja',
+      dateGroup: 'HARI INI',
       timestamp: Date.now(),
-      subtitle: 'Greeting'
+      subtitle: 'Sesi OpenCode Baru'
     })
 
     // Register in SQLite
@@ -615,11 +644,28 @@ export const useOpenCodeStore = defineStore('openCodeStore', () => {
         return true
       }
 
-      // 3. Check SQLite database
+      // 3. Load from OpenCode CLI native storage via `opencode export <sessionId>`
+      if (window.makaryaAPI?.loadOpenCodeSession) {
+        try {
+          const loaded = await window.makaryaAPI.loadOpenCodeSession(sessionId)
+          if (loaded && Array.isArray(loaded.messages) && loaded.messages.length > 0) {
+            messages.value = loaded.messages
+            sessionHistoryMap.value[sessionId] = JSON.parse(JSON.stringify(loaded.messages))
+            if (loaded.title) {
+              activeSessionTitle.value = loaded.title
+            }
+            return true
+          }
+        } catch (cliErr) {
+          console.warn('Gagal memuat sesi OpenCode CLI export:', cliErr)
+        }
+      }
+
+      // 4. Check SQLite database
       if (window.makaryaAPI?.dbGetChatHistory) {
         const dbSessionId = sessionId.startsWith('opencode_') ? sessionId : 'opencode_' + sessionId
         let history = await window.makaryaAPI.dbGetChatHistory(dbSessionId, 200)
-        
+
         // Also check raw sessionId if not found
         if ((!history || history.length === 0) && dbSessionId !== sessionId) {
           history = await window.makaryaAPI.dbGetChatHistory(sessionId, 200)
@@ -641,12 +687,12 @@ export const useOpenCodeStore = defineStore('openCodeStore', () => {
         }
       }
 
-      // 4. If empty fresh session, keep messages empty for clean hero screen
+      // 5. If empty fresh session, keep messages empty for clean hero screen
       messages.value = []
       sessionHistoryMap.value[sessionId] = []
       return true
     } catch (err) {
-      console.warn('Gagal memuat sesi:', err)
+      console.warn('Gagal memuat sesi OpenCode:', err)
       return false
     } finally {
       isLoadingSessionHistory.value = false
@@ -656,6 +702,10 @@ export const useOpenCodeStore = defineStore('openCodeStore', () => {
   async function deleteSession(sessionId: string): Promise<boolean> {
     try {
       delete sessionHistoryMap.value[sessionId]
+
+      if (window.makaryaAPI?.deleteOpenCodeSession) {
+        await window.makaryaAPI.deleteOpenCodeSession(sessionId).catch(() => {})
+      }
 
       if (window.makaryaAPI?.dbDeleteSession) {
         const dbSessionId = sessionId.startsWith('opencode_') ? sessionId : 'opencode_' + sessionId
@@ -687,6 +737,7 @@ export const useOpenCodeStore = defineStore('openCodeStore', () => {
     const msg = messages.value.find((m) => m.id === messageId)
     if (msg) {
       msg.isThinkingExpanded = !msg.isThinkingExpanded
+      msg.userToggledThinking = true
     }
   }
 

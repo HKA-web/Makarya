@@ -185,8 +185,8 @@ async function deleteSession(sessionId: string) {
         <p class="text-xs font-medium text-slate-400">
           {{ searchQuery ? 'Sesi Claude tidak ditemukan' : 'Belum ada riwayat sesi Claude' }}
         </p>
-        <p class="text-[10px] text-slate-500 max-w-[200px]">
-          Sesi Claude akan otomatis tersimpan di SQLite saat Anda mulai mengirim pesan.
+        <p class="text-[10px] text-slate-500 max-w-[220px]">
+          Riwayat sesi Claude otomatis disinkronkan langsung dari Claude CLI (/resume).
         </p>
       </div>
     </div>

@@ -1,279 +1,404 @@
 <script setup lang="ts">
-import { ref, watch, nextTick, onMounted, onUnmounted, computed } from 'vue'
-import { useToast } from 'primevue/usetoast'
+import { ref, onMounted, onUnmounted, nextTick, watch, computed } from 'vue'
+import { useAgentStore } from '@renderer/stores/agentStore'
 import { useWorkspaceStore } from '@renderer/stores/workspaceStore'
-import { useAgentStore, type AgentToolCallItem } from '@renderer/stores/agentStore'
 import { useSettingsStore } from '@renderer/stores/settingsStore'
 import { parseMarkdownBlocks, formatInlineMarkdown } from '@renderer/utils/markdownParser'
 import { extractImplementationPlan, type ParsedImplementationPlan } from '@renderer/utils/planParser'
 import ImplementationPlanCard from './ImplementationPlanCard.vue'
-import { getNuxtFileIcon, detectMonacoLanguage } from '@renderer/utils/languageDetector'
+import AgentModelModal from './AgentModelModal.vue'
+import AgentSessionModal from './AgentSessionModal.vue'
 import logoImg from '@renderer/assets/logo.png'
 import iconImg from '@renderer/assets/icon.jpg'
 
-const workspaceStore = useWorkspaceStore()
 const agentStore = useAgentStore()
+const workspaceStore = useWorkspaceStore()
 const settingsStore = useSettingsStore()
-const toast = useToast()
 
-const inputPrompt = ref('')
-const messagesContainerRef = ref<HTMLElement | null>(null)
-const textareaRef = ref<HTMLTextAreaElement | null>(null)
-const promptEditorRef = ref<HTMLDivElement | null>(null)
-const isEditorEmpty = ref<boolean>(true)
-const fileInputRef = ref<HTMLInputElement | null>(null)
+const inputText = ref('')
+const inputAreaRef = ref<HTMLTextAreaElement | null>(null)
+const messageContainer = ref<HTMLElement | null>(null)
+const includeActiveFile = ref(true)
+const copiedIndex = ref<string | null>(null)
+const isModelModalOpen = ref(false)
+const isSessionModalOpen = ref(false)
+const isDraggingOver = ref(false)
 
-// Clipboard & Attached Images
-const attachedImages = ref<string[]>([])
-const previewImageUrl = ref<string | null>(null)
-
-// Drag and Drop & Tagged Context Files
-export interface AttachedFileItem {
+export interface TaggedContextItem {
+  id: string
   path: string
   name: string
-  isDirectory?: boolean
-  lineRange?: string
   startLine?: number
   endLine?: number
+  lineRange?: string
   selectedSnippet?: string
   language?: string
+  isDirectory?: boolean
 }
-const attachedFiles = ref<AttachedFileItem[]>([])
-const isDraggingOver = ref<boolean>(false)
-let dragCounter = 0
 
-// @ Mention File / Context State
-interface MentionCandidate {
+export interface AttachedImageItem {
   name: string
-  path: string
-  isDirectory: boolean
-  badge?: string
-}
-const showMentionMenu = ref<boolean>(false)
-const mentionQuery = ref<string>('')
-const selectedMentionIndex = ref<number>(0)
-const projectFilesCache = ref<Array<{ name: string; path: string; isDirectory: boolean }>>([])
-
-// Dynamic Resizable Width (drag from left border)
-const panelWidth = ref<number>(340)
-const isResizing = ref<boolean>(false)
-
-function startResize(e: MouseEvent): void {
-  isResizing.value = true
-  const startX = e.clientX
-  const startWidth = panelWidth.value
-
-  function onMouseMove(moveEvent: MouseEvent): void {
-    const delta = startX - moveEvent.clientX
-    const newWidth = Math.max(260, Math.min(650, startWidth + delta))
-    panelWidth.value = newWidth
-  }
-
-  function onMouseUp(): void {
-    isResizing.value = false
-    window.removeEventListener('mousemove', onMouseMove)
-    window.removeEventListener('mouseup', onMouseUp)
-  }
-
-  window.addEventListener('mousemove', onMouseMove)
-  window.addEventListener('mouseup', onMouseUp)
+  relativePath: string
+  absolutePath: string
+  previewUrl: string
 }
 
-// Track open/collapsed state for thinking process and tool call outputs
-const userToggledThoughts = ref<Record<string, boolean>>({})
-const expandedTools = ref<Record<string, boolean>>({})
-
-// Floating menus
-const isModelMenuOpen = ref<boolean>(false)
-const modelSearchQuery = ref<string>('')
-const isAttachMenuOpen = ref<boolean>(false)
-const showSlashMenu = ref<boolean>(false)
-const isWorkspaceMenuOpen = ref<boolean>(false)
-const isSettingsMenuOpen = ref<boolean>(false)
-const sessionSearchQuery = ref<string>('')
-
-const filteredSessions = computed(() => {
-  const query = sessionSearchQuery.value.trim().toLowerCase()
-  if (!query) return agentStore.sessionsList
-  return agentStore.sessionsList.filter((s) => {
-    return (
-      s.title.toLowerCase().includes(query) ||
-      (s.lastMessage && s.lastMessage.toLowerCase().includes(query)) ||
-      s.model.toLowerCase().includes(query)
-    )
-  })
-})
-
-function formatSessionDate(dateStr?: string): string {
-  if (!dateStr) return ''
-  return settingsStore.formatDateTime(dateStr)
-}
-
-function handleOpenSessionsModal(): void {
-  agentStore.loadSessions()
-  agentStore.isSessionsModalOpen = true
-}
+const taggedContexts = ref<TaggedContextItem[]>([])
+const attachedImages = ref<AttachedImageItem[]>([])
+const imageInputRef = ref<HTMLInputElement | null>(null)
+const isUploadingImage = ref<boolean>(false)
 
 const connectedProject = computed(() => {
-  // 1. If explicit connectedWorkspacePath is set
-  const explicitPath = agentStore.connectedWorkspacePath
-  if (explicitPath) {
-    const norm = explicitPath.toLowerCase().replace(/\\/g, '/')
+  if (workspaceStore.activeRootPath) {
     const match = workspaceStore.workspaceRoots.find(
-      (r) => r.path.toLowerCase().replace(/\\/g, '/') === norm
+      (r) => r.path.toLowerCase().replace(/\\/g, '/') === workspaceStore.activeRootPath!.toLowerCase().replace(/\\/g, '/')
     )
     if (match) return match
-    const name = explicitPath.split(/[\\/]/).filter(Boolean).pop() || 'Project'
-    return { path: explicitPath, name }
+    const name = workspaceStore.activeRootPath.split(/[\\/]/).filter(Boolean).pop() || 'Project'
+    return { path: workspaceStore.activeRootPath, name }
   }
-
-  // 2. Automatic fallback: If any project root is opened in workspaceStore, automatically connect!
-  const autoRoot = workspaceStore.activeRootPath
-    ? workspaceStore.workspaceRoots.find(
-        (r) => r.path.toLowerCase().replace(/\\/g, '/') === workspaceStore.activeRootPath!.toLowerCase().replace(/\\/g, '/')
-      )
-    : workspaceStore.workspaceRoots[0]
-
-  if (autoRoot) {
-    agentStore.setConnectedWorkspacePath(autoRoot.path)
-    return autoRoot
-  }
-
-  return null
+  return workspaceStore.workspaceRoots[0] || null
 })
 
-function disconnectTargetWorkspace(): void {
-  agentStore.setConnectedWorkspacePath(null)
-  toast.add({
-    severity: 'info',
-    summary: 'Folder Target Dilepas',
-    detail: 'Folder target project telah dilepas.',
-    life: 2000
+// Interactive Question selection state
+const selectedAnswers = ref<Record<string, string>>({})
+const customAnswers = ref<Record<string, string>>({})
+
+// Collapsible tool outputs
+const expandedTools = ref<Record<string, boolean>>({})
+
+// Collapsible thinking process
+const expandedThinking = ref<Record<string, boolean>>({})
+
+onMounted(() => {
+  agentStore.loadModels()
+  agentStore.loadSessions()
+  agentStore.initListeners()
+  window.addEventListener('makarya:tag-to-agent', onMakaryaTagToAgent)
+  window.addEventListener('makarya:focus-agent-chat', onFocusAgentChat)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('makarya:tag-to-agent', onMakaryaTagToAgent)
+  window.removeEventListener('makarya:focus-agent-chat', onFocusAgentChat)
+})
+
+function onMakaryaTagToAgent(e: Event) {
+  const customEvent = e as CustomEvent<any>
+  const detail = customEvent.detail
+  if (!detail || !detail.path) return
+
+  let lineLabel = ''
+  if (detail.lineRange) {
+    lineLabel = detail.lineRange.startsWith('L') ? detail.lineRange : `L${detail.lineRange}`
+  } else if (detail.startLine && detail.endLine && detail.startLine !== detail.endLine) {
+    lineLabel = `L${detail.startLine}-L${detail.endLine}`
+  } else if (detail.startLine) {
+    lineLabel = `L${detail.startLine}`
+  }
+
+  const existingIdx = taggedContexts.value.findIndex(
+    (t) => t.path.toLowerCase() === detail.path.toLowerCase() && (t.lineRange || '') === (lineLabel || '')
+  )
+
+  const newTag: TaggedContextItem = {
+    id: `${detail.path}-${lineLabel || 'all'}-${Date.now()}`,
+    path: detail.path,
+    name: detail.name || detail.path.split(/[/\\]/).filter(Boolean).pop() || 'Untitled',
+    startLine: detail.startLine,
+    endLine: detail.endLine,
+    lineRange: lineLabel,
+    selectedSnippet: detail.selectedSnippet,
+    language: detail.language,
+    isDirectory: detail.isDirectory
+  }
+
+  if (existingIdx !== -1) {
+    taggedContexts.value[existingIdx] = newTag
+  } else {
+    taggedContexts.value.push(newTag)
+  }
+
+  // Insert tag directly into the chat input (e.g. "tes 📄 ImplementationPlanCard.vue")
+  const fileBadge = `📄 ${newTag.name}${newTag.lineRange ? ` ${newTag.lineRange}` : ''}`
+  if (!inputText.value.includes(fileBadge)) {
+    inputText.value = inputText.value.trim()
+      ? `${inputText.value.trim()} ${fileBadge} `
+      : `${fileBadge} `
+  }
+
+  adjustTextareaHeight()
+  nextTick(() => {
+    inputAreaRef.value?.focus()
   })
 }
 
-function toggleWorkspaceMenu(): void {
-  isSettingsMenuOpen.value = !isSettingsMenuOpen.value
-}
-
-function selectTargetWorkspace(root: { path: string; name: string }): void {
-  agentStore.setConnectedWorkspacePath(root.path)
-  workspaceStore.activeRootPath = root.path
-  isSettingsMenuOpen.value = false
-  isWorkspaceMenuOpen.value = false
-  toast.add({
-    severity: 'success',
-    summary: 'Ruang Kerja Terhubung',
-    detail: `Agen sekarang siap bekerja di folder "${root.name}"`,
-    life: 2500
+function onFocusAgentChat() {
+  nextTick(() => {
+    inputAreaRef.value?.focus()
   })
 }
 
-async function handleAddFolderForAgent(): Promise<void> {
-  if (!window.makaryaAPI?.openFolderDialog) return
-  try {
-    const res = await window.makaryaAPI.openFolderDialog()
-    if (!res.canceled && res.folderPath) {
-      await workspaceStore.addWorkspaceRoot(res.folderPath, res.entries)
-      agentStore.setConnectedWorkspacePath(res.folderPath)
-      isSettingsMenuOpen.value = false
-      isWorkspaceMenuOpen.value = false
-      const folderName = res.folderPath.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || res.folderPath
-      toast.add({
-        severity: 'success',
-        summary: 'Folder Ditambahkan & Terhubung',
-        detail: `Folder "${folderName}" berhasil ditambahkan dan terkunci untuk agen.`,
-        life: 3000
-      })
+function removeTaggedContext(id: string): void {
+  const idx = taggedContexts.value.findIndex((t) => t.id === id)
+  if (idx !== -1) {
+    const item = taggedContexts.value[idx]
+    if (item) {
+      const fileBadge = `📄 ${item.name}${item.lineRange ? ` ${item.lineRange}` : ''}`
+      inputText.value = inputText.value.replace(fileBadge, '').replace(/\s+/g, ' ').trim()
     }
-  } catch (err: any) {
-    toast.add({
-      severity: 'error',
-      summary: 'Gagal Menambah Folder',
-      detail: err?.message || 'Terjadi kesalahan saat membuka folder',
-      life: 3000
+    taggedContexts.value.splice(idx, 1)
+  }
+}
+
+async function handleChatContainerClick(e: MouseEvent) {
+  const target = (e.target as HTMLElement).closest('[data-file-ref]') as HTMLElement | null
+  if (target) {
+    const fileRef = target.getAttribute('data-file-ref')
+    if (fileRef) {
+      const cleanFileName = fileRef.split(':')[0].replace(/^📄\s*/, '').trim()
+      const targetLineMatch = fileRef.match(/:L?(\d+)/) || fileRef.match(/\s+L?(\d+)/)
+      const targetLine = targetLineMatch ? parseInt(targetLineMatch[1], 10) : undefined
+
+      // Find file in workspace
+      let foundPath = ''
+      if (cleanFileName.includes('/') || cleanFileName.includes('\\')) {
+        foundPath = cleanFileName
+      } else if (workspaceStore.workspaceRoots) {
+        const match = workspaceStore.recentFiles.find((f) => f.name.toLowerCase() === cleanFileName.toLowerCase()) ||
+          workspaceStore.tabList.find((t) => t.title.toLowerCase() === cleanFileName.toLowerCase())
+        if (match && match.filePath) foundPath = match.filePath
+        else if (match && (match as any).path) foundPath = (match as any).path
+      }
+
+      if (foundPath) {
+        await workspaceStore.openFile(foundPath, cleanFileName, targetLine)
+      }
+    }
+  }
+}
+
+let dragCounter = 0
+
+function handleDragEnter(e: DragEvent) {
+  e.preventDefault()
+  dragCounter++
+  if (e.dataTransfer) {
+    e.dataTransfer.dropEffect = 'copy'
+  }
+  isDraggingOver.value = true
+}
+
+function handleDragOver(e: DragEvent) {
+  e.preventDefault()
+  if (e.dataTransfer) {
+    e.dataTransfer.dropEffect = 'copy'
+  }
+  isDraggingOver.value = true
+}
+
+function handleDragLeave(e: DragEvent) {
+  e.preventDefault()
+  dragCounter--
+  if (dragCounter <= 0) {
+    dragCounter = 0
+    isDraggingOver.value = false
+  }
+}
+
+async function handleFileDrop(e: DragEvent) {
+  e.preventDefault()
+  e.stopPropagation()
+  dragCounter = 0
+  isDraggingOver.value = false
+
+  if (!e.dataTransfer) return
+
+  // 1. Check if dropped from Makarya internal FileTree / Tabs
+  const makaryaFileEntry = e.dataTransfer.getData('makarya/file-entry') || e.dataTransfer.getData('application/json')
+  if (makaryaFileEntry) {
+    try {
+      const parsed = JSON.parse(makaryaFileEntry)
+      if (parsed && parsed.path) {
+        addFileOrFolderTag(parsed.path, parsed.name, parsed.isDirectory)
+        return
+      }
+    } catch {
+      // Fallback
+    }
+  }
+
+  // 2. Check if dropped native OS files (from File Explorer / Desktop)
+  const files = e.dataTransfer.files
+  if (files && files.length > 0) {
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i]
+      if (file.type.startsWith('image/')) {
+        await processDroppedImage(file)
+      } else {
+        const filePath = (file as any).path || file.name
+        addFileOrFolderTag(filePath, file.name, false)
+      }
+    }
+    return
+  }
+
+  // 3. Fallback to URI list or text/plain
+  const uriList = e.dataTransfer.getData('text/uri-list')
+  const textData = uriList || e.dataTransfer.getData('text/plain') || e.dataTransfer.getData('text')
+  if (textData && textData.trim()) {
+    const lines = textData.trim().split(/[\r\n]+/)
+    for (const line of lines) {
+      const trimmed = line.replace(/^file:\/\/\/?/, '').replace(/%20/g, ' ').trim()
+      if (trimmed) {
+        const name = trimmed.split(/[/\\]/).filter(Boolean).pop() || trimmed
+        addFileOrFolderTag(trimmed, name, false)
+      }
+    }
+  }
+}
+
+function addFileOrFolderTag(path: string, name?: string, isDirectory?: boolean) {
+  const fileName = name || path.split(/[/\\]/).filter(Boolean).pop() || path
+  const existingIdx = taggedContexts.value.findIndex((t) => t.path.toLowerCase() === path.toLowerCase())
+  if (existingIdx === -1) {
+    taggedContexts.value.push({
+      id: `${path}-${Date.now()}`,
+      path,
+      name: fileName,
+      isDirectory
     })
   }
-}
 
-const filteredModels = computed(() => {
-  if (!modelSearchQuery.value.trim()) {
-    return agentStore.availableModels
+  // Insert tag directly into inputText (e.g. "📄 filename.vue")
+  const fileBadge = `📄 ${fileName}`
+  if (!inputText.value.includes(fileBadge)) {
+    inputText.value = inputText.value.trim()
+      ? `${inputText.value.trim()} ${fileBadge} `
+      : `${fileBadge} `
   }
-  const q = modelSearchQuery.value.toLowerCase().trim()
-  return agentStore.availableModels.filter((m) => m.toLowerCase().includes(q))
-})
 
-const slashActions = [
-  { prefix: '/plan', label: 'Buat Rencana Implementasi (Implementation Plan)', icon: 'i-lucide-clipboard-list', prompt: 'Buatkan Dokumen Rencana Implementasi (Implementation Plan) terstruktur untuk: ' },
-  { prefix: '/test', label: 'Test Sintaks File Aktif', icon: 'i-lucide-check-circle-2', prompt: 'Jalankan test sintaks pada file aktif ini dan periksa apakah ada error.' },
-  { prefix: '/git', label: 'Cek Git Status', icon: 'i-lucide-git-branch', prompt: "Jalankan 'git status' di terminal dan rangkumkan perubahannya." },
-  { prefix: '/review', label: 'Tinjau Perubahan (Review Changes)', icon: 'i-lucide-file-diff', prompt: 'Tinjau semua perubahan kode saat ini (git diff & git status) dan berikan ulasan ringkas.' },
-  { prefix: '/debug', label: 'Audit Bug & Keamanan', icon: 'i-lucide-shield-alert', prompt: 'Analisis potensi bug dan kelemahan keamanan pada file yang sedang dibuka, lalu berikan saran perbaikan.' },
-  { prefix: '/explain', label: 'Jelaskan Kode File Aktif', icon: 'i-lucide-book-open', prompt: 'Jelaskan cara kerja dan struktur file yang sedang saya buka ini secara terstruktur.' }
-]
-
-function getMessageImplementationPlan(message: any): ParsedImplementationPlan | null {
-  if (!message || !message.content) return null
-  return extractImplementationPlan(message.content, message.toolCalls, message.modifiedFiles)
-}
-
-function handleExecutePlanFromCard(plan: ParsedImplementationPlan): void {
-  const tasksSummary = plan.tasks.map((t) => `- [${t.completed ? 'x' : ' '}] ${t.title}`).join('\n')
-  const prompt = `Silakan lanjutkan dan eksekusi Rencana Implementasi "${plan.title}" secara bertahap menggunakan tool terkait.\n\nDaftar Tahapan Kerja:\n${tasksSummary}\n\nJalankan pembuatan/modifikasi file dan pengujian sintaks/verifikasi sesuai rencana.`
-  handleSendMessage(prompt)
-}
-
-function handleRequestPlanRevision(plan: ParsedImplementationPlan): void {
-  inputPrompt.value = `Mengenai Rencana Implementasi "${plan.title}", tolong revisi dan sesuaikan beberapa hal berikut: `
   adjustTextareaHeight()
   nextTick(() => {
-    textareaRef.value?.focus()
+    inputAreaRef.value?.focus()
   })
 }
 
-function triggerPlanMode(): void {
-  if (!inputPrompt.value.startsWith('/plan')) {
-    inputPrompt.value = '/plan ' + inputPrompt.value.trim()
+async function processDroppedImage(file: File) {
+  const projectRoot = connectedProject.value?.path
+  const reader = new FileReader()
+  reader.onload = async (ev) => {
+    const base64 = ev.target?.result as string
+    if (base64 && window.makaryaAPI?.saveImageToProject && projectRoot) {
+      try {
+        const res = await window.makaryaAPI.saveImageToProject(projectRoot, file.name, base64)
+        if (res.success && res.relativePath && res.absolutePath) {
+          attachedImages.value.push({
+            name: res.fileName || file.name,
+            relativePath: res.relativePath,
+            absolutePath: res.absolutePath,
+            previewUrl: base64
+          })
+          return
+        }
+      } catch (err) {
+        console.warn('Gagal menyimpan gambar drop:', err)
+      }
+    }
+    if (base64) {
+      attachedImages.value.push({
+        name: file.name,
+        relativePath: file.name,
+        absolutePath: file.name,
+        previewUrl: base64
+      })
+    }
   }
-  adjustTextareaHeight()
+  reader.readAsDataURL(file)
+}
+
+async function handlePaste(e: ClipboardEvent) {
+  const clipboardData = e.clipboardData
+  if (!clipboardData) return
+
+  const items = clipboardData.items
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]
+    if (item.type.indexOf('image') !== -1) {
+      e.preventDefault()
+      const blob = item.getAsFile()
+      if (blob) {
+        const timestamp = Date.now()
+        const ext = blob.type.split('/')[1] || 'png'
+        const imageName = `pasted-image-${timestamp}.${ext}`
+        const imageFile = new File([blob], imageName, { type: blob.type })
+        await processDroppedImage(imageFile)
+      }
+      return
+    }
+  }
+}
+
+function isToolExpanded(tool: any): boolean {
+  if (expandedTools.value[tool.id] !== undefined) {
+    return expandedTools.value[tool.id]
+  }
+  return tool.status === 'running' || tool.status === 'waiting_approval'
+}
+
+function toggleToolExpand(toolId: string, currentStatus?: string) {
+  const current = isToolExpanded({ id: toolId, status: currentStatus })
+  expandedTools.value[toolId] = !current
+}
+
+function selectOption(msgId: string, option: string) {
+  selectedAnswers.value[msgId] = option
+  customAnswers.value[msgId] = ''
+}
+
+async function submitAnswer(msgId: string) {
+  const custom = customAnswers.value[msgId]?.trim()
+  const chosen = custom || selectedAnswers.value[msgId]
+  if (!chosen) return
+
+  await agentStore.submitQuestionAnswer(msgId, chosen)
+  scrollToBottom()
+}
+
+function getVisibleTools(tools?: any[]) {
+  if (!tools) return []
+  return tools.filter((t) => t.name !== 'ask_question')
+}
+
+function isThinkingExpanded(msg: any): boolean {
+  if (expandedThinking.value[msg.id] !== undefined) {
+    return expandedThinking.value[msg.id]
+  }
+  return Boolean(msg.isThinking || msg.isStreaming)
+}
+
+function toggleThinkingExpand(msgId: string, msg: any): void {
+  const current = isThinkingExpanded(msg)
+  expandedThinking.value[msgId] = !current
+}
+
+function scrollToBottom() {
   nextTick(() => {
-    textareaRef.value?.focus()
+    if (messageContainer.value) {
+      messageContainer.value.scrollTop = messageContainer.value.scrollHeight
+    }
   })
 }
-
-function renderMarkdown(text?: any): string {
-  if (text === null || text === undefined) return ''
-  const str = typeof text === 'string' ? text : String(text)
-  if (!str) return ''
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/`([^`]+)`/g, '<code class="bg-[#42b883]/10 text-[#42b883] border border-[#42b883]/20 px-1.5 py-0.5 rounded text-[10px] font-mono">$1</code>')
-    .replace(/\*\*([^*]+)\*\*/g, '<strong class="font-semibold text-zinc-100">$1</strong>')
-    .replace(/\*([^*]+)\*/g, '<em class="italic text-zinc-300">$1</em>')
-    .replace(/\n/g, '<br />')
-}
-
-const formatInlineMarkdown = renderMarkdown
-
-const filteredSlashActions = computed(() => {
-  if (!inputPrompt.value.startsWith('/')) return []
-  const query = inputPrompt.value.toLowerCase()
-  return slashActions.filter((action) => action.prefix.startsWith(query) || action.label.toLowerCase().includes(query.slice(1)))
-})
 
 function adjustTextareaHeight(): void {
   nextTick(() => {
-    const el = textareaRef.value
+    const el = inputAreaRef.value
     if (!el) return
 
-    // Kembalikan tinggi ke 'auto' terlebih dahulu agar scrollHeight dapat menyusut saat karakter dihapus
     el.style.height = 'auto'
 
-    // Jika kosong atau hanya whitespace, biarkan rows="1" menentukan tingginya (kembali normal 1 baris)
-    if (!inputPrompt.value || inputPrompt.value.trim() === '') {
+    if (!inputText.value || inputText.value.trim() === '') {
+      el.style.height = '22px'
       el.style.overflowY = 'hidden'
       return
     }
@@ -285,2445 +410,784 @@ function adjustTextareaHeight(): void {
       el.style.height = `${maxHeight}px`
       el.style.overflowY = 'auto'
     } else {
-      el.style.height = `${scrollHeight}px`
+      el.style.height = `${Math.max(22, scrollHeight)}px`
       el.style.overflowY = 'hidden'
     }
   })
 }
 
-function handleApprovalGlobalKeydown(e: KeyboardEvent): void {
-  if (!e.altKey) return
-
-  // Find any tool in agentStore.messages currently waiting for approval
-  let waitingTool: AgentToolCallItem | undefined
-  for (let i = agentStore.messages.length - 1; i >= 0; i--) {
-    const msg = agentStore.messages[i]
-    if (msg.toolCalls) {
-      const found = msg.toolCalls.find((t) => t.status === 'waiting_approval')
-      if (found) {
-        waitingTool = found
-        break
-      }
-    }
-  }
-
-  if (!waitingTool) return
-
-  // Alt + Enter -> Accept
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault()
-    e.stopPropagation()
-    agentStore.approveToolCall(waitingTool.id, true)
-    return
-  }
-
-  // Shift + Alt + Backspace / Delete -> Reject
-  if (e.shiftKey && (e.key === 'Backspace' || e.key === 'Delete')) {
-    e.preventDefault()
-    e.stopPropagation()
-    agentStore.approveToolCall(waitingTool.id, false)
-    return
-  }
-}
-
-onMounted(async () => {
+watch(inputText, () => {
   adjustTextareaHeight()
-  agentStore.initListeners()
-  window.addEventListener('makarya:tag-to-agent', handleTagToAgentEvent)
-  window.addEventListener('makarya:focus-agent-chat', handleFocusAgentChat)
-  window.addEventListener('keydown', handleApprovalGlobalKeydown, true)
-  await agentStore.loadModels()
 })
 
-onUnmounted(() => {
-  window.removeEventListener('makarya:tag-to-agent', handleTagToAgentEvent)
-  window.removeEventListener('makarya:focus-agent-chat', handleFocusAgentChat)
-  window.removeEventListener('keydown', handleApprovalGlobalKeydown, true)
-})
-
-// Auto scroll to bottom when new messages, thoughts, or tokens stream in
 watch(
-  () => [agentStore.messages, agentStore.activeRequestId],
-  async () => {
-    await nextTick()
-    if (messagesContainerRef.value) {
-      messagesContainerRef.value.scrollTop = messagesContainerRef.value.scrollHeight
-    }
+  () => [
+    agentStore.messages.length,
+    agentStore.messages[agentStore.messages.length - 1]?.content,
+    agentStore.messages[agentStore.messages.length - 1]?.thoughts,
+    agentStore.messages[agentStore.messages.length - 1]?.toolCalls?.length
+  ],
+  () => {
+    scrollToBottom()
   },
   { deep: true }
 )
 
-function checkMentionAtCursor(): void {
-  const textarea = textareaRef.value
-  const val = inputPrompt.value
-  const cursorPos = textarea ? (textarea.selectionStart ?? val.length) : val.length
-  const textBefore = val.slice(0, cursorPos)
-  const match = textBefore.match(/(?:^|\s)@([a-zA-Z0-9_.\-\/\\]*)$/)
-  if (match) {
-    mentionQuery.value = match[1]
-    showMentionMenu.value = true
-    selectedMentionIndex.value = 0
-  } else {
-    showMentionMenu.value = false
-  }
+function triggerImageUpload(): void {
+  if (!connectedProject.value) return
+  imageInputRef.value?.click()
 }
 
-// Check for slash command and @ mention triggers, plus dynamic auto-resize
-watch(inputPrompt, (newVal) => {
-  adjustTextareaHeight()
+async function handleImageInputChange(event: Event): Promise<void> {
+  const target = event.target as HTMLInputElement
+  const files = target.files
+  if (!files || files.length === 0 || !connectedProject.value) return
 
-  // Slash commands
-  if (newVal.startsWith('/') && newVal.length < 15 && !newVal.includes(' ')) {
-    showSlashMenu.value = true
-  } else {
-    showSlashMenu.value = false
-  }
+  const projectRoot = connectedProject.value.path
+  isUploadingImage.value = true
 
-  // @ mention file
-  checkMentionAtCursor()
-})
-
-// Scan workspace directory tree in background for quick @ mention suggestions
-async function refreshProjectFilesCache(): Promise<void> {
-  const root = connectedProject.value?.path || workspaceStore.getEffectiveProjectRoot()
-  if (!root || !window.makaryaAPI?.readDirectory) return
-
-  const results: Array<{ name: string; path: string; isDirectory: boolean }> = []
-  const queue: string[] = [root]
-  const maxFiles = 350
-
-  while (queue.length > 0 && results.length < maxFiles) {
-    const current = queue.shift()!
-    try {
-      const entries = await window.makaryaAPI.readDirectory(current)
-      for (const entry of entries) {
-        if (results.length >= maxFiles) break
-        const lower = entry.name.toLowerCase()
-        if (
-          lower === 'node_modules' ||
-          lower === '.git' ||
-          lower === '.nuxt' ||
-          lower === 'dist' ||
-          lower === 'vendor' ||
-          lower === '.output' ||
-          lower === '.idea' ||
-          lower === '.vscode'
-        ) {
-          continue
-        }
-        results.push({
-          name: entry.name,
-          path: entry.path,
-          isDirectory: entry.isDirectory
-        })
-        if (entry.isDirectory) {
-          queue.push(entry.path)
-        }
-      }
-    } catch {
-      // ignore read error on subdirectories
-    }
-  }
-
-  projectFilesCache.value = results
-}
-
-watch(
-  () => [connectedProject.value?.path, workspaceStore.workspaceRoots.length],
-  () => {
-    refreshProjectFilesCache()
-  },
-  { immediate: true }
-)
-
-const mentionCandidates = computed<MentionCandidate[]>(() => {
-  const list: MentionCandidate[] = []
-  const seenPaths = new Set<string>()
-
-  // 1. Current active file in editor (Highest priority)
-  if (workspaceStore.activeTab && workspaceStore.activeTab.filePath) {
-    const norm = workspaceStore.activeTab.filePath.toLowerCase().replace(/\\/g, '/')
-    seenPaths.add(norm)
-    list.push({
-      name: workspaceStore.activeTab.title,
-      path: workspaceStore.activeTab.filePath,
-      isDirectory: false,
-      badge: 'File Aktif'
-    })
-  }
-
-  // 2. Currently open editor tabs
-  for (const tab of workspaceStore.tabList) {
-    if (tab.filePath && tab.tabType === 'editor') {
-      const norm = tab.filePath.toLowerCase().replace(/\\/g, '/')
-      if (!seenPaths.has(norm)) {
-        seenPaths.add(norm)
-        list.push({
-          name: tab.title,
-          path: tab.filePath,
-          isDirectory: false,
-          badge: 'Tab Terbuka'
-        })
-      }
-    }
-  }
-
-  // 3. Files from cached scan
-  for (const item of projectFilesCache.value) {
-    const norm = item.path.toLowerCase().replace(/\\/g, '/')
-    if (!seenPaths.has(norm)) {
-      seenPaths.add(norm)
-      list.push({
-        name: item.name,
-        path: item.path,
-        isDirectory: item.isDirectory
-      })
-    }
-  }
-
-  // 4. Fallback from workspace roots entries
-  if (list.length <= 2 && workspaceStore.workspaceRoots.length > 0) {
-    for (const root of workspaceStore.workspaceRoots) {
-      for (const entry of root.entries) {
-        const norm = entry.path.toLowerCase().replace(/\\/g, '/')
-        if (!seenPaths.has(norm)) {
-          seenPaths.add(norm)
-          list.push({
-            name: entry.name,
-            path: entry.path,
-            isDirectory: entry.isDirectory
-          })
-        }
-      }
-    }
-  }
-
-  return list
-})
-
-const filteredMentionCandidates = computed(() => {
-  const q = mentionQuery.value.toLowerCase().trim()
-  if (!q) {
-    return mentionCandidates.value.slice(0, 15)
-  }
-  return mentionCandidates.value
-    .filter((item) => item.name.toLowerCase().includes(q) || item.path.toLowerCase().includes(q))
-    .sort((a, b) => {
-      const aStarts = a.name.toLowerCase().startsWith(q) ? 1 : 0
-      const bStarts = b.name.toLowerCase().startsWith(q) ? 1 : 0
-      return bStarts - aStarts
-    })
-    .slice(0, 15)
-})
-
-function getFileTypeInfo(fileName: string): { label: string; colorClass: string } {
-  const ext = fileName.split('.').pop()?.toLowerCase() || ''
-  if (ext === 'ts' || ext === 'tsx') return { label: 'TS', colorClass: 'text-blue-400' }
-  if (ext === 'js' || ext === 'jsx') return { label: 'JS', colorClass: 'text-amber-400' }
-  if (ext === 'vue') return { label: 'VUE', colorClass: 'text-emerald-400' }
-  if (ext === 'php') return { label: '</>', colorClass: 'text-indigo-400' }
-  if (ext === 'html') return { label: 'HTML', colorClass: 'text-orange-400' }
-  if (ext === 'css' || ext === 'scss') return { label: 'CSS', colorClass: 'text-sky-400' }
-  if (ext === 'json') return { label: '{}', colorClass: 'text-yellow-400' }
-  if (ext === 'md') return { label: 'MD', colorClass: 'text-slate-300' }
-  if (ext === 'py') return { label: 'PY', colorClass: 'text-yellow-500' }
-  if (ext === 'go') return { label: 'GO', colorClass: 'text-cyan-400' }
-  if (ext === 'rs') return { label: 'RS', colorClass: 'text-orange-500' }
-  if (ext === 'java' || ext === 'kt') return { label: 'JAVA', colorClass: 'text-red-400' }
-  if (ext === 'sql') return { label: 'SQL', colorClass: 'text-pink-400' }
-  return { label: '</>', colorClass: 'text-cyan-400' }
-}
-
-function formatUserMessage(content: string): string {
-  if (!content) return ''
-
-  const safe = content
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-
-  return safe.replace(/@([a-zA-Z0-9_.\-\/\\]+)(?::(L\d+(?:-L\d+)?))?/g, (_match, fileName, lineRange) => {
-    const info = getFileTypeInfo(fileName)
-    const linesHtml = lineRange ? `<span class="chip-line-range">${lineRange}</span>` : ''
-    return `<span class="inline-file-chip select-none cursor-pointer" data-file="${fileName}" ${lineRange ? `data-lines="${lineRange}"` : ''}><span class="chip-type-badge ${info.colorClass}">${info.label}</span><span class="chip-filename">${fileName}</span>${linesHtml}</span>`
-  })
-}
-
-function handleUserMessageClick(e: MouseEvent): void {
-  const target = (e.target as HTMLElement).closest('.inline-file-chip') as HTMLElement | null
-  if (target) {
-    const fileName = target.getAttribute('data-file')
-    const lines = target.getAttribute('data-lines')
-    let startLine: number | undefined
-    let endLine: number | undefined
-    if (lines) {
-      const match = lines.match(/L(\d+)(?:-L(\d+))?/)
-      if (match) {
-        startLine = parseInt(match[1], 10)
-        endLine = match[2] ? parseInt(match[2], 10) : startLine
-      }
-    }
-
-    if (fileName) {
-      const match =
-        workspaceStore.tabList.find((t) => t.title === fileName) ||
-        projectFilesCache.value.find((f) => f.name === fileName)
-      if (match) {
-        navigateToCode(match.path, match.name || fileName, startLine, endLine)
-      }
-    }
-  }
-}
-
-function insertTextAtCursor(textToInsert: string): void {
-  const textarea = textareaRef.value
-  if (textarea) {
-    const val = inputPrompt.value
-    const cursorPos = textarea.selectionStart ?? val.length
-    const textBefore = val.slice(0, cursorPos)
-    const textAfter = val.slice(cursorPos)
-    const needsSpace = textBefore.length > 0 && !textBefore.endsWith(' ') && !textToInsert.startsWith(' ')
-    const insertStr = (needsSpace ? ' ' : '') + textToInsert
-    inputPrompt.value = textBefore + insertStr + textAfter
-    const newCursor = cursorPos + insertStr.length
-    nextTick(() => {
-      textarea.focus()
-      textarea.setSelectionRange(newCursor, newCursor)
-      adjustTextareaHeight()
-    })
-  } else {
-    const needsSpace = inputPrompt.value.length > 0 && !inputPrompt.value.endsWith(' ') && !textToInsert.startsWith(' ')
-    inputPrompt.value += (needsSpace ? ' ' : '') + textToInsert
-    adjustTextareaHeight()
-  }
-}
-
-function selectMentionItem(item: MentionCandidate): void {
-  addAttachedFile({
-    path: item.path,
-    name: item.name,
-    isDirectory: item.isDirectory
-  })
-
-  // Insert @filename at the exact cursor position, replacing partial @query
-  const textarea = textareaRef.value
-  if (textarea) {
-    const val = inputPrompt.value
-    const cursorPos = textarea.selectionStart ?? val.length
-    const textBefore = val.slice(0, cursorPos)
-    const textAfter = val.slice(cursorPos)
-
-    const match = textBefore.match(/@([a-zA-Z0-9_.\-\/\\]*)$/)
-    if (match) {
-      const matchStart = match.index!
-      inputPrompt.value = textBefore.slice(0, matchStart) + `@${item.name} ` + textAfter
-      const newCursor = matchStart + item.name.length + 2
-      nextTick(() => {
-        textarea.focus()
-        textarea.setSelectionRange(newCursor, newCursor)
-        adjustTextareaHeight()
-      })
-    } else {
-      inputPrompt.value = textBefore + `@${item.name} ` + textAfter
-      const newCursor = cursorPos + item.name.length + 2
-      nextTick(() => {
-        textarea.focus()
-        textarea.setSelectionRange(newCursor, newCursor)
-        adjustTextareaHeight()
-      })
-    }
-  } else {
-    inputPrompt.value += `@${item.name} `
-    adjustTextareaHeight()
-  }
-
-  showMentionMenu.value = false
-  selectedMentionIndex.value = 0
-
-  toast.add({
-    severity: 'info',
-    summary: item.isDirectory ? 'Folder Ditautkan' : 'Berkas Ditautkan',
-    detail: `@${item.name}`,
-    life: 2000
-  })
-}
-
-function triggerMentionInput(): void {
-  refreshProjectFilesCache()
-  const textarea = textareaRef.value
-  if (textarea) {
-    const val = inputPrompt.value
-    const cursorPos = textarea.selectionStart ?? val.length
-    const textBefore = val.slice(0, cursorPos)
-    const textAfter = val.slice(cursorPos)
-    const needsSpace = textBefore.length > 0 && !textBefore.endsWith(' ')
-    const insertStr = (needsSpace ? ' ' : '') + '@'
-    inputPrompt.value = textBefore + insertStr + textAfter
-    const newCursor = cursorPos + insertStr.length
-    nextTick(() => {
-      textarea.focus()
-      textarea.setSelectionRange(newCursor, newCursor)
-      adjustTextareaHeight()
-    })
-  } else {
-    inputPrompt.value += (inputPrompt.value && !inputPrompt.value.endsWith(' ') ? ' ' : '') + '@'
-    adjustTextareaHeight()
-  }
-  showMentionMenu.value = true
-  selectedMentionIndex.value = 0
-}
-
-function selectSlashAction(action: typeof slashActions[0]): void {
-  if (!connectedProject.value?.path) {
-    toast.add({
-      severity: 'warn',
-      summary: 'Target Project Diperlukan',
-      detail: 'Silakan pilih atau buka folder target project terlebih dahulu sebelum mengobrol dengan Agen.',
-      life: 3500
-    })
-    isSettingsMenuOpen.value = true
-    return
-  }
-  inputPrompt.value = ''
-  adjustTextareaHeight()
-  showSlashMenu.value = false
-  handleSendMessage(action.prompt)
-}
-
-function toggleThought(messageId: string, currentlyExpanded: boolean): void {
-  userToggledThoughts.value[messageId] = !currentlyExpanded
-}
-
-function isThoughtExpanded(messageId: string, isThinking?: boolean): boolean {
-  if (userToggledThoughts.value[messageId] !== undefined) {
-    return userToggledThoughts.value[messageId]
-  }
-  return !!isThinking
-}
-
-function toggleToolOutput(toolCallId: string): void {
-  expandedTools.value[toolCallId] = !expandedTools.value[toolCallId]
-}
-
-function isToolExpanded(tool: AgentToolCallItem): boolean {
-  if (expandedTools.value[tool.id] !== undefined) {
-    return expandedTools.value[tool.id]
-  }
-  return tool.status === 'running' || tool.status === 'error'
-}
-
-function getToolIcon(toolName: string): { icon: string; color: string } {
-  switch (toolName) {
-    case 'execute_command':
-      return { icon: 'i-lucide-terminal', color: 'text-cyan-400' }
-    case 'read_file':
-      return { icon: 'i-lucide-file-text', color: 'text-amber-400' }
-    case 'write_file':
-      return { icon: 'i-lucide-file-pen', color: 'text-emerald-400' }
-    case 'list_dir':
-      return { icon: 'i-lucide-folder-search', color: 'text-indigo-400' }
-    default:
-      return { icon: 'i-lucide-wrench', color: 'text-slate-400' }
-  }
-}
-
-function getToolDisplayLabel(tool: AgentToolCallItem): string {
-  if (tool.name === 'execute_command') {
-    return `$ ${tool.args?.command || 'terminal'}`
-  }
-  if (tool.name === 'read_file') {
-    return `Baca: ${tool.args?.filePath || 'berkas'}`
-  }
-  if (tool.name === 'write_file') {
-    return `Tulis: ${tool.args?.filePath || 'berkas'}`
-  }
-  if (tool.name === 'list_dir') {
-    return `Daftar: ${tool.args?.dirPath || 'root'}`
-  }
-  return tool.name
-}
-
-function handlePaste(event: ClipboardEvent): void {
-  const items = event.clipboardData?.items
-  if (!items) return
-
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i]
-    if (item.type.startsWith('image/')) {
-      event.preventDefault()
-      const blob = item.getAsFile()
-      if (blob) {
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i]
+    if (file.type.startsWith('image/')) {
+      await new Promise<void>((resolve) => {
         const reader = new FileReader()
-        reader.onload = (e) => {
-          const result = e.target?.result as string
-          if (result && !attachedImages.value.includes(result)) {
-            attachedImages.value.push(result)
-            toast.add({
-              severity: 'info',
-              summary: 'Gambar Ditempel',
-              detail: 'Gambar dari clipboard berhasil dilampirkan',
-              life: 2000
+        reader.onload = async (e) => {
+          const base64 = e.target?.result as string
+          if (base64 && window.makaryaAPI?.saveImageToProject) {
+            try {
+              const res = await window.makaryaAPI.saveImageToProject(projectRoot, file.name, base64)
+              if (res.success && res.relativePath && res.absolutePath) {
+                attachedImages.value.push({
+                  name: res.fileName || file.name,
+                  relativePath: res.relativePath,
+                  absolutePath: res.absolutePath,
+                  previewUrl: base64
+                })
+              }
+            } catch (err) {
+              console.warn('Gagal mengunggah gambar ke .makarya:', err)
+            }
+          } else if (base64) {
+            attachedImages.value.push({
+              name: file.name,
+              relativePath: file.name,
+              absolutePath: file.name,
+              previewUrl: base64
             })
           }
+          resolve()
         }
-        reader.readAsDataURL(blob)
-      }
+        reader.readAsDataURL(file)
+      })
     }
   }
+
+  target.value = ''
+  isUploadingImage.value = false
 }
 
 function removeAttachedImage(index: number): void {
   attachedImages.value.splice(index, 1)
 }
 
-function openImageLightbox(url: string): void {
-  previewImageUrl.value = url
-}
+async function handleSendMessage() {
+  const text = inputText.value.trim()
+  if ((!text && attachedImages.value.length === 0 && taggedContexts.value.length === 0) || agentStore.isGenerating) return
 
-function closeImageLightbox(): void {
-  previewImageUrl.value = null
-}
+  let fullPrompt = text || 'Harap periksa dan analisis berkas/kode/gambar yang dilampirkan.'
 
-function triggerFileInput(): void {
-  fileInputRef.value?.click()
-}
-
-function handleFileInputChange(event: Event): void {
-  const target = event.target as HTMLInputElement
-  const files = target.files
-  if (!files) return
-
-  for (let i = 0; i < files.length; i++) {
-    const file = files[i]
-    if (file.type.startsWith('image/')) {
-      const reader = new FileReader()
-      reader.onload = (e) => {
-        const result = e.target?.result as string
-        if (result && !attachedImages.value.includes(result)) {
-          attachedImages.value.push(result)
+  // 1. Sertakan Tagged Code Snippets & Files (dari Ctrl+L atau Drag & Drop)
+  if (taggedContexts.value.length > 0) {
+    const taggedInstructions = taggedContexts.value
+      .map((tag) => {
+        if (tag.selectedSnippet) {
+          return `[Potongan Kode Dilampirkan (Ctrl+L): ${tag.path} (${tag.lineRange || `Line ${tag.startLine}`})]\n\`\`\`${tag.language || ''}\n${tag.selectedSnippet}\n\`\`\``
         }
-      }
-      reader.readAsDataURL(file)
-    }
-  }
-  target.value = ''
-}
-
-function formatRelativePath(fullPath: string): string {
-  const root = workspaceStore.getEffectiveProjectRoot()
-  if (root && fullPath.toLowerCase().startsWith(root.toLowerCase())) {
-    const rel = fullPath.slice(root.length).replace(/^[\\/]/, '')
-    return rel ? `.../${rel.replace(/\\/g, '/')}` : ''
-  }
-  const parts = fullPath.replace(/\\/g, '/').split('/')
-  if (parts.length > 3) {
-    return '.../' + parts.slice(-3).join('/')
-  }
-  return fullPath
-}
-
-function addAttachedFile(fileItem: AttachedFileItem): void {
-  const exists = attachedFiles.value.some(
-    (f) =>
-      f.path.toLowerCase() === fileItem.path.toLowerCase() &&
-      (f.lineRange || '') === (fileItem.lineRange || '')
-  )
-  if (!exists) {
-    attachedFiles.value.push(fileItem)
-  }
-}
-
-function handleTagToAgentEvent(e: Event): void {
-  const customEvent = e as CustomEvent<AttachedFileItem>
-  const detail = customEvent.detail
-  if (!detail) return
-
-  addAttachedFile(detail)
-  const tagText = `@${detail.name}${detail.lineRange ? `:${detail.lineRange}` : ''} `
-  insertTextAtCursor(tagText)
-
-  toast.add({
-    severity: 'info',
-    summary: 'Kode Ditandai ke Chat',
-    detail: tagText.trim(),
-    life: 2000
-  })
-}
-
-function handleFocusAgentChat(): void {
-  nextTick(() => {
-    setTimeout(() => {
-      textareaRef.value?.focus()
-    }, 60)
-  })
-}
-
-const activeEditorFileContext = computed(() => {
-  const tab = workspaceStore.activeTab
-  if (!tab || !tab.filePath || tab.tabType !== 'editor') return null
-
-  const viewState = tab.viewState
-  let lineRange = ''
-  let startLine: number | undefined
-  let endLine: number | undefined
-
-  if (
-    viewState?.selection &&
-    (viewState.selection.startLineNumber !== viewState.selection.endLineNumber ||
-      viewState.selection.startColumn !== viewState.selection.endColumn)
-  ) {
-    startLine = viewState.selection.startLineNumber
-    endLine = viewState.selection.endLineNumber
-    lineRange = startLine === endLine ? `L${startLine}` : `L${startLine}-L${endLine}`
-  } else if (viewState?.cursorPosition) {
-    startLine = viewState.cursorPosition.lineNumber
-    endLine = viewState.cursorPosition.lineNumber
-    lineRange = `L${startLine}`
-  }
-
-  return {
-    path: tab.filePath,
-    name: tab.title,
-    language: tab.language,
-    lineRange,
-    startLine,
-    endLine
-  }
-})
-
-function tagCurrentActiveFileToAttached(): void {
-  if (!activeEditorFileContext.value) return
-  const currentEd = workspaceStore.getActiveEditorInstance()
-  let snippet = ''
-  if (currentEd) {
-    const selection = currentEd.getSelection()
-    const model = currentEd.getModel()
-    if (selection && model && !selection.isEmpty()) {
-      snippet = model.getValueInRange(selection)
-    }
-  }
-
-  const detail: AttachedFileItem = {
-    path: activeEditorFileContext.value.path,
-    name: activeEditorFileContext.value.name,
-    language: activeEditorFileContext.value.language,
-    lineRange: activeEditorFileContext.value.lineRange,
-    startLine: activeEditorFileContext.value.startLine,
-    endLine: activeEditorFileContext.value.endLine,
-    selectedSnippet: snippet || undefined
-  }
-
-  addAttachedFile(detail)
-  const tagText = `@${detail.name}${detail.lineRange ? `:${detail.lineRange}` : ''} `
-  insertTextAtCursor(tagText)
-
-  toast.add({
-    severity: 'info',
-    summary: 'Konteks Berkas Ditandai ke Chat',
-    detail: tagText.trim(),
-    life: 2000
-  })
-}
-
-async function navigateToCode(path?: string, name?: string, startLine?: number, endLine?: number): Promise<void> {
-  if (!path) return
-  const fileName = name || path.split(/[/\\]/).pop() || 'file'
-  await workspaceStore.openFile(path, fileName)
-  if (startLine) {
-    nextTick(() => {
-      setTimeout(() => {
-        const editor = workspaceStore.getActiveEditorInstance()
-        if (editor) {
-          editor.revealLineInCenter(startLine)
-          if (endLine && endLine > startLine) {
-            editor.setSelection({
-              startLineNumber: startLine,
-              startColumn: 1,
-              endLineNumber: endLine,
-              endColumn: editor.getModel()?.getLineMaxColumn(endLine) || 1
-            })
-          } else {
-            editor.setPosition({ lineNumber: startLine, column: 1 })
-          }
-          editor.focus()
-        }
-      }, 100)
-    })
-  }
-}
-
-function removeAttachedFile(index: number): void {
-  attachedFiles.value.splice(index, 1)
-}
-
-function handleDragEnter(e: DragEvent): void {
-  e.preventDefault()
-  dragCounter++
-  if (e.dataTransfer && e.dataTransfer.types.length > 0) {
-    isDraggingOver.value = true
-  }
-}
-
-function handleDragOver(e: DragEvent): void {
-  e.preventDefault()
-  if (e.dataTransfer) {
-    e.dataTransfer.dropEffect = 'copy'
-  }
-  isDraggingOver.value = true
-}
-
-function handleDragLeave(e: DragEvent): void {
-  e.preventDefault()
-  dragCounter--
-  if (dragCounter <= 0) {
-    dragCounter = 0
-    isDraggingOver.value = false
-  }
-}
-
-async function handleDrop(e: DragEvent): Promise<void> {
-  e.preventDefault()
-  dragCounter = 0
-  isDraggingOver.value = false
-
-  if (!e.dataTransfer) return
-
-  // 1. Cek format custom dari File Explorer (FileTreeNode.vue)
-  const makaryaRaw = e.dataTransfer.getData('makarya/file-entry')
-  if (makaryaRaw) {
-    try {
-      const entry = JSON.parse(makaryaRaw)
-      if (entry && entry.path) {
-        const fileName = entry.name || entry.path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || entry.path
-        addAttachedFile({
-          path: entry.path,
-          name: fileName,
-          isDirectory: !!entry.isDirectory
-        })
-        insertTextAtCursor(`@${fileName} `)
-        toast.add({
-          severity: 'info',
-          summary: entry.isDirectory ? 'Folder Ditautkan' : 'Berkas Ditautkan',
-          detail: `@${fileName}`,
-          life: 2000
-        })
-        return
-      }
-    } catch {
-      // lanjut ke fallback
-    }
-  }
-
-  // 2. Cek text/plain (path file teks)
-  const plainText = e.dataTransfer.getData('text/plain')
-
-  // 3. Cek native files dari OS Explorer atau browser
-  const dtFiles = e.dataTransfer.files
-  if (dtFiles && dtFiles.length > 0) {
-    let textToInsert = ''
-    for (let i = 0; i < dtFiles.length; i++) {
-      const f = dtFiles[i]
-      if (f.type.startsWith('image/')) {
-        const reader = new FileReader()
-        reader.onload = (readEv) => {
-          const result = readEv.target?.result as string
-          if (result && !attachedImages.value.includes(result)) {
-            attachedImages.value.push(result)
-          }
-        }
-        reader.readAsDataURL(f)
-        continue
-      }
-
-      // Berkas atau folder biasa
-      const nativePath = (f as any).path || plainText || f.name
-      const fileName = f.name || nativePath.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || 'berkas'
-      addAttachedFile({
-        path: nativePath,
-        name: fileName,
-        isDirectory: false
+        return `[Berkas Dilampirkan: ${tag.path}]`
       })
-      textToInsert += `@${fileName} `
+      .join('\n\n')
+    fullPrompt = `${taggedInstructions}\n\n${fullPrompt}`
+  }
+
+  // 2. Sertakan perintah & path gambar yang diunggah ke .makarya
+  if (attachedImages.value.length > 0) {
+    const imageInstructions = attachedImages.value
+      .map(
+        (img) =>
+          `[Lampiran Gambar Proyek: ${img.relativePath} (Path: ${img.absolutePath})]\nPerintah Analisis Gambar: Harap baca, analisis, dan periksa berkas gambar yang tersimpan di path "${img.relativePath}" untuk menyelesaikan instruksi ini.`
+      )
+      .join('\n\n')
+    fullPrompt = `${imageInstructions}\n\n${fullPrompt}`
+  }
+
+  // 3. Sertakan Konteks File Aktif jika dicentang
+  let activeFileContext: any = undefined
+  if (includeActiveFile.value && workspaceStore.activeTab?.filePath) {
+    const activeTab = workspaceStore.activeTab
+    activeFileContext = {
+      filePath: activeTab.filePath,
+      fileName: activeTab.title,
+      content: activeTab.content,
+      language: activeTab.language
     }
-    if (textToInsert) {
-      insertTextAtCursor(textToInsert)
-      toast.add({
-        severity: 'info',
-        summary: 'Berkas Ditautkan ke Chat',
-        detail: textToInsert.trim(),
-        life: 2000
-      })
-    }
-    return
+    fullPrompt = `[Konteks File Aktif: ${activeTab.filePath}]\n\`\`\`${activeTab.language || ''}\n${activeTab.content || ''}\n\`\`\`\n\n${fullPrompt}`
   }
 
-  // 4. Fallback jika ada teks berupa path
-  if (plainText && (plainText.includes('/') || plainText.includes('\\'))) {
-    const fileName = plainText.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || plainText
-    addAttachedFile({
-      path: plainText.trim(),
-      name: fileName,
-      isDirectory: false
-    })
-    insertTextAtCursor(`@${fileName} `)
-    toast.add({
-      severity: 'info',
-      summary: 'Berkas Ditautkan ke Chat',
-      detail: `@${fileName}`,
-      life: 2000
-    })
-  }
-}
+  const displayPrompt = text || (taggedContexts.value.length > 0
+    ? taggedContexts.value.map((t) => `📄 ${t.name}${t.lineRange ? ` ${t.lineRange}` : ''}`).join(' ')
+    : 'Harap periksa dan analisis berkas/kode/gambar yang dilampirkan.')
 
-async function handleSendMessage(customPrompt?: string): Promise<void> {
-  if (!connectedProject.value?.path) {
-    toast.add({
-      severity: 'warn',
-      summary: 'Target Project Diperlukan',
-      detail: 'Silakan pilih atau buka folder target project terlebih dahulu sebelum mengobrol dengan Agen.',
-      life: 3500
-    })
-    isSettingsMenuOpen.value = true
-    return
-  }
+  const attachedFileContexts = taggedContexts.value.map((t) => ({
+    filePath: t.path,
+    fileName: t.name,
+    content: t.selectedSnippet,
+    language: t.language,
+    lineRange: t.lineRange,
+    startLine: t.startLine,
+    endLine: t.endLine,
+    selectedSnippet: t.selectedSnippet
+  }))
 
-  if (!agentStore.selectedModel) {
-    toast.add({
-      severity: 'error',
-      summary: 'Model AI Belum Terdeteksi',
-      detail: 'Tidak ada model AI yang dipilih atau 9router belum aktif. Silakan hubungkan 9router Anda.',
-      life: 3500
-    })
-    isSettingsMenuOpen.value = true
-    return
-  }
+  const rawImages = attachedImages.value.map((img) => img.previewUrl)
 
-  const promptText = (customPrompt || inputPrompt.value).trim()
-  const imagesToSend = customPrompt ? [] : [...attachedImages.value]
-
-  if ((!promptText && imagesToSend.length === 0) || agentStore.isGenerating) return
-
-  inputPrompt.value = ''
+  inputText.value = ''
+  taggedContexts.value = []
   attachedImages.value = []
-  showSlashMenu.value = false
-  isModelMenuOpen.value = false
-  isAttachMenuOpen.value = false
-  isSettingsMenuOpen.value = false
   adjustTextareaHeight()
+  scrollToBottom()
 
-  const activeTab = workspaceStore.activeTab
-  const activeFileContext =
-    activeTab && activeTab.filePath
-      ? {
-          filePath: activeTab.filePath,
-          fileName: activeTab.title,
-          content: activeTab.content,
-          language: activeTab.language
-        }
-      : undefined
-
-  const effectiveProjectRoot = connectedProject.value?.path || workspaceStore.getEffectiveProjectRoot()
-
-  // Extract all @mentions from promptText
-  const mentionMatches: Array<{ fileName: string; lineRange?: string; startLine?: number; endLine?: number }> = []
-  const mentionRegex = /@([a-zA-Z0-9_.\-\/\\]+)(?::(L\d+(?:-L\d+)?))?/g
-  let m: RegExpExecArray | null
-  while ((m = mentionRegex.exec(promptText)) !== null) {
-    const fileName = m[1]
-    const lineRange = m[2]
-    let startLine: number | undefined
-    let endLine: number | undefined
-    if (lineRange) {
-      const lMatch = lineRange.match(/L(\d+)(?:-L(\d+))?/)
-      if (lMatch) {
-        startLine = parseInt(lMatch[1], 10)
-        endLine = lMatch[2] ? parseInt(lMatch[2], 10) : startLine
-      }
-    }
-    mentionMatches.push({ fileName, lineRange, startLine, endLine })
-  }
-
-  // Find all file items for mentions & attached files
-  const resolvedFiles: AttachedFileItem[] = []
-  const seenPaths = new Set<string>()
-
-  for (const mention of mentionMatches) {
-    // 1. Check attachedFiles cache
-    const fromAttached = attachedFiles.value.find(
-      (f) =>
-        f.name.toLowerCase() === mention.fileName.toLowerCase() ||
-        f.path.toLowerCase().endsWith(mention.fileName.toLowerCase())
-    )
-    if (fromAttached) {
-      const key = fromAttached.path.toLowerCase() + (mention.lineRange || '')
-      if (!seenPaths.has(key)) {
-        seenPaths.add(key)
-        resolvedFiles.push({
-          ...fromAttached,
-          lineRange: mention.lineRange || fromAttached.lineRange,
-          startLine: mention.startLine ?? fromAttached.startLine,
-          endLine: mention.endLine ?? fromAttached.endLine
-        })
-      }
-      continue
-    }
-
-    // 2. Check activeTab & tabList
-    const fromTab = workspaceStore.tabList.find(
-      (t) =>
-        t.title.toLowerCase() === mention.fileName.toLowerCase() ||
-        (t.filePath && t.filePath.toLowerCase().endsWith(mention.fileName.toLowerCase()))
-    )
-    if (fromTab && fromTab.filePath) {
-      const key = fromTab.filePath.toLowerCase() + (mention.lineRange || '')
-      if (!seenPaths.has(key)) {
-        seenPaths.add(key)
-        resolvedFiles.push({
-          path: fromTab.filePath,
-          name: fromTab.title,
-          language: fromTab.language,
-          lineRange: mention.lineRange,
-          startLine: mention.startLine,
-          endLine: mention.endLine
-        })
-      }
-      continue
-    }
-
-    // 3. Check projectFilesCache
-    const fromCache = projectFilesCache.value.find(
-      (f) =>
-        f.name.toLowerCase() === mention.fileName.toLowerCase() ||
-        f.path.toLowerCase().endsWith(mention.fileName.toLowerCase())
-    )
-    if (fromCache) {
-      const key = fromCache.path.toLowerCase() + (mention.lineRange || '')
-      if (!seenPaths.has(key)) {
-        seenPaths.add(key)
-        resolvedFiles.push({
-          path: fromCache.path,
-          name: fromCache.name,
-          isDirectory: fromCache.isDirectory,
-          lineRange: mention.lineRange,
-          startLine: mention.startLine,
-          endLine: mention.endLine
-        })
-      }
-      continue
-    }
-  }
-
-  // Load content for all resolved files
-  let attachedContexts: Array<{
-    filePath: string
-    fileName: string
-    content?: string
-    language?: string
-    lineRange?: string
-    startLine?: number
-    endLine?: number
-    selectedSnippet?: string
-  }> | undefined = undefined
-
-  if (resolvedFiles.length > 0) {
-    attachedContexts = await Promise.all(
-      resolvedFiles.map(async (f) => {
-        let content = ''
-        if (f.selectedSnippet) {
-          content = f.selectedSnippet
-        } else if (!f.isDirectory && window.makaryaAPI?.readFile) {
-          try {
-            content = await window.makaryaAPI.readFile(f.path)
-            if (f.startLine && content) {
-              const lines = content.split('\n')
-              const startIdx = Math.max(0, f.startLine - 1)
-              const endIdx = f.endLine ? Math.min(lines.length, f.endLine) : startIdx + 1
-              content = lines.slice(startIdx, endIdx).join('\n')
-            }
-          } catch (err) {
-            console.warn(`Gagal membaca berkas lampiran ${f.path}:`, err)
-            content = `(Gagal membaca berkas: ${err})`
-          }
-        } else if (f.isDirectory) {
-          content = `(Folder direktori: ${f.path})`
-        }
-        return {
-          filePath: f.path,
-          fileName: f.name,
-          content,
-          language: f.language || detectMonacoLanguage(f.name),
-          lineRange: f.lineRange,
-          startLine: f.startLine,
-          endLine: f.endLine,
-          selectedSnippet: f.selectedSnippet
-        }
-      })
-    )
-  }
+  const projectRoot = connectedProject.value?.path || (workspaceStore.activeTab?.filePath
+    ? workspaceStore.activeTab.filePath.substring(0, Math.max(workspaceStore.activeTab.filePath.lastIndexOf('\\'), workspaceStore.activeTab.filePath.lastIndexOf('/')))
+    : (workspaceStore.activeRootPath || (workspaceStore.workspaceRoots && workspaceStore.workspaceRoots.length > 0 ? workspaceStore.workspaceRoots[0].path : undefined)))
 
   await agentStore.sendMessage(
-    promptText,
+    fullPrompt,
     activeFileContext,
-    effectiveProjectRoot,
-    imagesToSend.length > 0 ? imagesToSend : undefined,
-    attachedContexts
+    projectRoot,
+    rawImages.length > 0 ? rawImages : undefined,
+    attachedFileContexts.length > 0 ? attachedFileContexts : undefined,
+    displayPrompt
   )
 }
 
-function handleKeydown(event: KeyboardEvent): void {
-  // 1. Mention Menu Keyboard Navigation
-  if (showMentionMenu.value && filteredMentionCandidates.value.length > 0) {
-    if (event.key === 'ArrowDown') {
-      event.preventDefault()
-      selectedMentionIndex.value = (selectedMentionIndex.value + 1) % filteredMentionCandidates.value.length
-      return
-    }
-    if (event.key === 'ArrowUp') {
-      event.preventDefault()
-      selectedMentionIndex.value =
-        (selectedMentionIndex.value - 1 + filteredMentionCandidates.value.length) %
-        filteredMentionCandidates.value.length
-      return
-    }
-    if (event.key === 'Tab' || event.key === 'Enter') {
-      event.preventDefault()
-      const item = filteredMentionCandidates.value[selectedMentionIndex.value] || filteredMentionCandidates.value[0]
-      if (item) {
-        selectMentionItem(item)
-      }
-      return
-    }
-    if (event.key === 'Escape') {
-      showMentionMenu.value = false
-      return
-    }
-  }
-
-  // 2. Slash Menu Keyboard Navigation
-  if (showSlashMenu.value && filteredSlashActions.value.length > 0) {
-    if (event.key === 'Tab' || event.key === 'Enter') {
-      event.preventDefault()
-      selectSlashAction(filteredSlashActions.value[0])
-      return
-    }
-    if (event.key === 'Escape') {
-      showSlashMenu.value = false
-      return
-    }
-  }
-
-  // 3. Send Message
-  if (event.key === 'Enter' && !event.shiftKey) {
-    event.preventDefault()
-    if (!connectedProject.value?.path) {
-      toast.add({
-        severity: 'warn',
-        summary: 'Target Project Diperlukan',
-        detail: 'Silakan pilih atau buka folder target project terlebih dahulu sebelum mengobrol dengan Agen.',
-        life: 3500
-      })
-      isSettingsMenuOpen.value = true
-      return
-    }
+function handleKeyDown(e: KeyboardEvent) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault()
     handleSendMessage()
   }
 }
 
-function handleReviewChanges(): void {
-  handleSendMessage('Tinjau semua perubahan kode saat ini (jalankan git status dan git diff) dan berikan ulasan ringkas.')
+function formatMessageTime(timestamp?: number | string): string {
+  if (!timestamp) return ''
+  if (typeof timestamp === 'number') {
+    return settingsStore.formatTimestamp(timestamp) || new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  }
+  if (typeof timestamp === 'string') {
+    // If it's already a formatted time like "23.50", "23:50", "00.28"
+    if (/^\d{1,2}[:.]\d{2}/.test(timestamp)) {
+      return timestamp
+    }
+    // If it's a numeric string timestamp
+    if (/^\d{10,}$/.test(timestamp)) {
+      const num = Number(timestamp)
+      return settingsStore.formatTimestamp(num) || new Date(num).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    }
+    const formatted = settingsStore.formatTimestamp(timestamp)
+    if (formatted) return formatted
+    const d = new Date(timestamp)
+    if (!isNaN(d.getTime())) {
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    }
+    return timestamp
+  }
+  return ''
 }
 
-const copiedMessageId = ref<string | null>(null)
-
-async function handleCopyMessage(msg: { id: string; content?: string }): Promise<void> {
-  if (!msg.content) return
-  try {
-    await navigator.clipboard.writeText(msg.content.trim())
-    copiedMessageId.value = msg.id
-    toast.add({
-      severity: 'info',
-      summary: 'Berhasil Disalin',
-      detail: 'Isi pesan berhasil disalin ke clipboard',
-      life: 2000
-    })
-    setTimeout(() => {
-      if (copiedMessageId.value === msg.id) {
-        copiedMessageId.value = null
-      }
-    }, 2000)
-  } catch (err) {
-    console.error('Failed to copy message:', err)
-  }
-}
-
-function handleEditUserMessage(msg: { content?: string; images?: string[]; attachedFiles?: any[] }): void {
-  if (!msg.content) return
-  inputPrompt.value = msg.content
-  if (msg.images && msg.images.length > 0) {
-    attachedImages.value = [...msg.images]
-  }
+function handleEditPrompt(content: string) {
+  inputText.value = content
   adjustTextareaHeight()
   nextTick(() => {
-    textareaRef.value?.focus()
-  })
-  toast.add({
-    severity: 'info',
-    summary: 'Edit Prompt',
-    detail: 'Pesan telah dimuat ke input untuk diedit.',
-    life: 2000
+    inputAreaRef.value?.focus()
   })
 }
 
-async function handleResendUserMessage(msg: { id: string }): Promise<void> {
+async function handleResendPrompt(content: string) {
   if (agentStore.isGenerating) return
-
-  if (!connectedProject.value?.path) {
-    toast.add({
-      severity: 'warn',
-      summary: 'Target Project Diperlukan',
-      detail: 'Silakan pilih atau buka folder target project terlebih dahulu sebelum mengobrol dengan Agen.',
-      life: 3500
-    })
-    isSettingsMenuOpen.value = true
-    return
-  }
+  const projectRoot = connectedProject.value?.path || (workspaceStore.activeTab?.filePath
+    ? workspaceStore.activeTab.filePath.substring(0, Math.max(workspaceStore.activeTab.filePath.lastIndexOf('\\'), workspaceStore.activeTab.filePath.lastIndexOf('/')))
+    : (workspaceStore.activeRootPath || (workspaceStore.workspaceRoots && workspaceStore.workspaceRoots.length > 0 ? workspaceStore.workspaceRoots[0].path : undefined)))
 
   const activeTab = workspaceStore.activeTab
   const activeFileContext =
-    activeTab && activeTab.filePath
+    includeActiveFile.value && activeTab && activeTab.filePath
       ? {
-          filePath: activeTab.filePath,
-          fileName: activeTab.title,
-          content: activeTab.content,
-          language: activeTab.language
-        }
+        filePath: activeTab.filePath,
+        fileName: activeTab.title,
+        content: activeTab.content,
+        language: activeTab.language
+      }
       : undefined
 
-  const effectiveProjectRoot = connectedProject.value?.path || workspaceStore.getEffectiveProjectRoot()
-
-  toast.add({
-    severity: 'info',
-    summary: 'Kirim Ulang Prompt',
-    detail: 'Membatalkan perubahan dan respon sebelumnya lalu mengeksekusi ulang prompt...',
-    life: 2000
-  })
-
-  await agentStore.revertAndResendMessage(msg.id, activeFileContext, effectiveProjectRoot)
+  await agentStore.sendMessage(content, activeFileContext, projectRoot)
 }
 
-function handleClearChat(): void {
-  if (agentStore.messages.length === 0) return
-  agentStore.clearHistory()
-  toast.add({
-    severity: 'info',
-    summary: 'Percakapan Dibersihkan',
-    detail: 'Riwayat obrolan pada sesi ini telah dibersihkan.',
-    life: 2000
-  })
-}
-
-async function handleCopyText(text: string, label: string = 'Teks'): Promise<void> {
+async function copyMessageContent(content: string, msgId: string) {
   try {
-    await navigator.clipboard.writeText(text.trim())
-    toast.add({
-      severity: 'info',
-      summary: 'Berhasil Disalin',
-      detail: `${label} berhasil disalin ke clipboard`,
-      life: 2000
-    })
-  } catch (copyError) {
-    console.error('Failed to copy text:', copyError)
+    await navigator.clipboard.writeText(content)
+    copiedIndex.value = msgId
+    setTimeout(() => {
+      if (copiedIndex.value === msgId) copiedIndex.value = null
+    }, 2000)
+  } catch (err) {
+    console.warn('Gagal menyalin pesan:', err)
   }
 }
 
-function handleApplyToActiveEditor(codeSnippet: string): void {
+async function handleRegenerateResponse(messageId: string) {
+  if (agentStore.isGenerating) return
+  const projectRoot = connectedProject.value?.path || (workspaceStore.activeTab?.filePath
+    ? workspaceStore.activeTab.filePath.substring(0, Math.max(workspaceStore.activeTab.filePath.lastIndexOf('\\'), workspaceStore.activeTab.filePath.lastIndexOf('/')))
+    : (workspaceStore.activeRootPath || (workspaceStore.workspaceRoots && workspaceStore.workspaceRoots.length > 0 ? workspaceStore.workspaceRoots[0].path : undefined)))
+
   const activeTab = workspaceStore.activeTab
-  if (!activeTab || activeTab.tabType === 'welcome') {
-    toast.add({
-      severity: 'warn',
-      summary: 'Tidak Ada File Aktif',
-      detail: 'Buka file di editor terlebih dahulu untuk menerapkan kode',
-      life: 2500
-    })
-    return
-  }
+  const activeFileContext =
+    includeActiveFile.value && activeTab && activeTab.filePath
+      ? {
+        filePath: activeTab.filePath,
+        fileName: activeTab.title,
+        content: activeTab.content,
+        language: activeTab.language
+      }
+      : undefined
 
-  workspaceStore.updateTabContent(activeTab.id, codeSnippet.trim())
-  toast.add({
-    severity: 'success',
-    summary: 'Kode Diterapkan',
-    detail: `Kode berhasil diterapkan ke file "${activeTab.title}"`,
-    life: 2500
+  await agentStore.revertAndResendMessage(messageId, activeFileContext, projectRoot)
+}
+
+async function copyCode(code: string, blockKey: string) {
+  try {
+    await navigator.clipboard.writeText(code)
+    copiedIndex.value = blockKey
+    setTimeout(() => {
+      if (copiedIndex.value === blockKey) copiedIndex.value = null
+    }, 2000)
+  } catch (err) {
+    console.warn('Gagal menyalin kode:', err)
+  }
+}
+
+function applyToEditor(code: string) {
+  if (workspaceStore.activeTab && workspaceStore.activeTab.tabType === 'editor') {
+    workspaceStore.updateTabContent(workspaceStore.activeTab.id, code)
+  }
+}
+
+function getToolSummaryArg(tool: any): string {
+  if (!tool.args) return ''
+  if (tool.args.filePath) return tool.args.filePath.split(/[\\/]/).pop() || tool.args.filePath
+  if (tool.args.dirPath) return tool.args.dirPath.split(/[\\/]/).pop() || tool.args.dirPath
+  if (tool.args.command) return tool.args.command.length > 30 ? tool.args.command.slice(0, 30) + '...' : tool.args.command
+  if (tool.args.query) return `"${tool.args.query}"`
+  return ''
+}
+
+function getToolIcon(toolName: string): string {
+  switch (toolName) {
+    case 'execute_command':
+    case 'bash':
+    case 'terminal':
+      return 'i-lucide-terminal'
+    case 'read_file':
+    case 'view_file':
+      return 'i-lucide-file-text'
+    case 'write_file':
+    case 'edit_file':
+    case 'replace_file_content':
+      return 'i-lucide-file-pen'
+    case 'list_dir':
+      return 'i-lucide-folder-search'
+    case 'grep_search':
+      return 'i-lucide-search'
+    default:
+      return 'i-lucide-wrench'
+  }
+}
+
+function getMessageImplementationPlan(message: any): ParsedImplementationPlan | null {
+  if (!message || !message.content) return null
+  return extractImplementationPlan(message.content, message.toolCalls, message.modifiedFiles)
+}
+
+function handleExecutePlanFromCard(plan: ParsedImplementationPlan): void {
+  const tasksSummary = plan.tasks.map((t) => `- [${t.completed ? 'x' : ' '}] ${t.title}`).join('\n')
+  const prompt = `Silakan lanjutkan dan eksekusi Rencana Implementasi "${plan.title}" secara bertahap menggunakan tool terkait.\n\nDaftar Tahapan Kerja:\n${tasksSummary}\n\nJalankan pembuatan/modifikasi file dan pengujian sintaks/verifikasi sesuai rencana.`
+  inputText.value = prompt
+  handleSendMessage()
+}
+
+function handleRequestPlanRevision(plan: ParsedImplementationPlan): void {
+  inputText.value = `Mengenai Rencana Implementasi "${plan.title}", tolong revisi dan sesuaikan beberapa hal berikut: `
+  adjustTextareaHeight()
+  nextTick(() => {
+    inputAreaRef.value?.focus()
   })
-}
-
-function toggleModelMenu(): void {
-  isModelMenuOpen.value = !isModelMenuOpen.value
-  if (isModelMenuOpen.value) {
-    isWorkspaceMenuOpen.value = false
-  }
-  if (!isModelMenuOpen.value) {
-    modelSearchQuery.value = ''
-  }
-}
-
-function selectModel(modelName: string): void {
-  agentStore.setSelectedModel(modelName)
-  settingsStore.ai.defaultModel = modelName
-  isModelMenuOpen.value = false
-  isSettingsMenuOpen.value = false
-  modelSearchQuery.value = ''
-}
-
-function triggerVoiceNotice(): void {
-  toast.add({
-    severity: 'info',
-    summary: 'Voice Input',
-    detail: 'Fitur input suara akan segera hadir di pembaruan berikutnya.',
-    life: 2000
-  })
-}
-
-// Expandable state for message modifiedFiles cards
-const expandedMessageFiles = ref<Record<string, boolean>>({})
-
-function toggleMessageFilesExpanded(messageId: string): void {
-  expandedMessageFiles.value = {
-    ...expandedMessageFiles.value,
-    [messageId]: !expandedMessageFiles.value[messageId]
-  }
-}
-
-async function handleReviewMessageFiles(
-  files?: Array<{
-    filePath: string
-    fileName: string
-    additions: number
-    deletions: number
-    originalContent?: string
-    newContent?: string
-  }>
-): Promise<void> {
-  if (!files || files.length === 0) return
-
-  // 1. Ensure all files from this message are present in sessionModifiedFiles so bottom drawer appears
-  for (const f of files) {
-    const norm = f.filePath.replace(/\\/g, '/').toLowerCase()
-    const existing = agentStore.sessionModifiedFiles.find((s) => s.filePath.replace(/\\/g, '/').toLowerCase() === norm)
-    if (!existing) {
-      agentStore.sessionModifiedFiles.push({
-        filePath: f.filePath,
-        fileName: f.fileName,
-        additions: f.additions,
-        deletions: f.deletions,
-        originalContent: f.originalContent,
-        newContent: f.newContent
-      })
-    }
-    // 2. Set pending diff in workspaceStore so Monaco editor renders the diff
-    if (f.originalContent !== undefined && f.newContent !== undefined) {
-      workspaceStore.setPendingDiff(f.filePath, f.originalContent, f.newContent)
-    }
-  }
-
-  // 3. Open and focus the first file
-  const first = files[0]
-  if (first) {
-    await workspaceStore.openFile(first.filePath, first.fileName)
-  }
-}
-
-async function openFileWithDiff(file: {
-  filePath: string
-  fileName: string
-  additions: number
-  deletions: number
-  originalContent?: string
-  newContent?: string
-}): Promise<void> {
-  const norm = file.filePath.replace(/\\/g, '/').toLowerCase()
-  const existing = agentStore.sessionModifiedFiles.find((s) => s.filePath.replace(/\\/g, '/').toLowerCase() === norm)
-  if (!existing) {
-    agentStore.sessionModifiedFiles.push({
-      filePath: file.filePath,
-      fileName: file.fileName,
-      additions: file.additions,
-      deletions: file.deletions,
-      originalContent: file.originalContent,
-      newContent: file.newContent
-    })
-  }
-
-  if (file.originalContent !== undefined && file.newContent !== undefined) {
-    workspaceStore.setPendingDiff(file.filePath, file.originalContent, file.newContent)
-  }
-
-  await workspaceStore.openFile(file.filePath, file.fileName)
 }
 </script>
 
 <template>
-  <div
-    :style="{ width: `${panelWidth}px` }"
-    class="h-full flex flex-col bg-[#090d14] rounded-2xl border border-white/[0.08] select-none flex-shrink-0 text-slate-100 font-sans relative overflow-hidden shadow-sm transition-all"
-    :class="{ 'ring-2 ring-[#42b883] border-[#42b883]/60': isDraggingOver }"
-    @dragenter.prevent="handleDragEnter"
+  <aside
+    @dragenter="handleDragEnter"
     @dragover.prevent="handleDragOver"
-    @dragleave.prevent="handleDragLeave"
-    @drop.prevent="handleDrop"
-  >
-    <!-- Drag & Drop Visual Overlay (Antigravity Nuxt Style) -->
-    <div
-      v-if="isDraggingOver"
-      class="absolute inset-0 z-50 bg-[#090d14]/90 backdrop-blur-sm border-2 border-dashed border-[#42b883] rounded-2xl flex flex-col items-center justify-center p-6 text-center pointer-events-none animate-fade-in"
-    >
-      <div class="w-14 h-14 rounded-2xl bg-[#42b883]/20 border border-[#42b883]/50 flex items-center justify-center mb-3 shadow-lg shadow-[#42b883]/25 animate-bounce">
-        <UIcon name="i-lucide-arrow-down-to-line" class="size-7 text-[#42b883]" />
+    @dragleave="handleDragLeave"
+    @drop.prevent="handleFileDrop"
+    class="w-88 h-full flex flex-col bg-[#090d14] rounded-2xl border border-white/[0.08] select-none flex-shrink-0 text-slate-100 font-sans relative overflow-hidden shadow-sm transition-all">
+    <!-- Drag & Drop Overlay Indicator -->
+    <div v-if="isDraggingOver"
+      class="absolute inset-0 z-50 bg-[#0b131e]/95 backdrop-blur-xs border-2 border-dashed border-[#42b883] rounded-2xl flex flex-col items-center justify-center gap-2 pointer-events-none transition-all">
+      <div class="w-12 h-12 rounded-2xl bg-[#42b883]/20 border border-[#42b883]/50 flex items-center justify-center text-[#42b883] animate-bounce shadow-lg shadow-emerald-500/20">
+        <UIcon name="i-lucide-arrow-down-to-line" class="size-6" />
       </div>
-      <h3 class="text-sm font-bold text-white mb-1">Lepaskan Berkas di Sini</h3>
-      <p class="text-[11px] text-slate-300 max-w-[220px] leading-relaxed">
-        Tarik berkas dari File Explorer atau Windows Explorer untuk dilampirkan ke obrolan agen
-      </p>
+      <span class="text-xs font-semibold text-emerald-300">Lepaskan file / gambar ke Chat Agen</span>
+      <span class="text-[10px] text-slate-400">Lampirkan file explorer atau gambar ke Makarya Agent</span>
     </div>
 
-    <!-- Left Resize Drag Handle -->
+    <!-- Header (Makarya Emerald / Mint Accent) -->
     <div
-      @mousedown.prevent="startResize"
-      class="absolute top-0 bottom-0 -left-1 w-2 cursor-col-resize z-40 hover:bg-[#42b883]/60 transition-colors"
-      :class="{ 'bg-[#42b883]/70': isResizing }"
-      title="Tarik untuk mengubah lebar panel AI"
-    ></div>
-
-    <!-- Chat Sessions History Modal / Drawer Overlay -->
-    <div
-      v-if="agentStore.isSessionsModalOpen"
-      class="absolute inset-0 bg-[#070b13]/92 backdrop-blur-md z-50 flex flex-col p-3.5 space-y-3 animate-in fade-in zoom-in-95 duration-150 select-none"
-    >
-      <!-- Modal Header -->
-      <div class="flex items-center justify-between pb-2 border-b border-white/[0.08] flex-shrink-0">
-        <div class="flex items-center gap-2">
-          <div class="w-6 h-6 rounded-lg bg-[#42b883]/15 border border-[#42b883]/30 flex items-center justify-center text-[#42b883]">
-            <UIcon name="i-lucide-history" class="size-3.5" />
-          </div>
-          <div>
-            <div class="text-xs font-semibold text-white leading-tight">Riwayat Sesi Obrolan</div>
-            <div class="text-[10px] text-slate-400">Pilih sesi untuk melanjutkan obrolan</div>
-          </div>
-        </div>
-        <button
-          @click="agentStore.isSessionsModalOpen = false"
-          class="w-6 h-6 rounded-lg flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/[0.08] transition-colors cursor-pointer"
-          title="Tutup riwayat"
-        >
-          <UIcon name="i-lucide-x" class="size-3.5" />
-        </button>
-      </div>
-
-      <!-- Action: Mulai Sesi Baru -->
-      <button
-        @click="agentStore.createNewSession()"
-        class="w-full py-2 px-3 rounded-xl bg-[#42b883] hover:bg-[#34d399] text-[#090d14] font-semibold text-xs flex items-center justify-center gap-2 shadow-lg shadow-[#42b883]/25 active:scale-98 transition-all cursor-pointer flex-shrink-0"
-      >
-        <UIcon name="i-lucide-plus-circle" class="size-4 text-[#090d14]" />
-        <span>Mulai Obrolan Baru</span>
-      </button>
-
-      <!-- Search Input -->
-      <div class="relative flex-shrink-0">
-        <UIcon name="i-lucide-search" class="size-3 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-        <input
-          v-model="sessionSearchQuery"
-          type="text"
-          placeholder="Cari sesi obrolan..."
-          class="w-full bg-[#080d16] border border-white/[0.08] focus:border-[#42b883]/50 focus:ring-1 focus:ring-[#42b883]/20 rounded-xl pl-7 pr-7 py-1.5 text-[11px] text-slate-200 placeholder:text-slate-500 outline-none transition-all"
-        />
-        <button
-          v-if="sessionSearchQuery"
-          @click="sessionSearchQuery = ''"
-          class="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white cursor-pointer"
-        >
-          <UIcon name="i-lucide-x" class="size-3" />
-        </button>
-      </div>
-
-      <!-- Scrollable Sessions List (Master) -->
-      <div class="flex-1 overflow-y-auto space-y-2 pr-1 custom-scroll">
-        <div
-          v-for="session in filteredSessions"
-          :key="session.id"
-          @click="agentStore.switchSession(session.id)"
-          class="p-2.5 rounded-xl border transition-all cursor-pointer flex flex-col gap-1.5 group relative"
-          :class="session.id === agentStore.currentSessionId
-            ? 'bg-[#42b883]/15 border-[#42b883]/45 shadow-sm shadow-[#42b883]/10'
-            : 'bg-[#0f1624]/60 hover:bg-[#131d2e] border-white/[0.06] hover:border-white/[0.12]'"
-        >
-          <!-- Title & Active Badge & Delete Button -->
-          <div class="flex items-center justify-between gap-1.5">
-            <div class="flex items-center gap-1.5 min-w-0 pr-1">
-              <span
-                v-if="session.id === agentStore.currentSessionId"
-                class="w-1.5 h-1.5 rounded-full bg-[#42b883] vue-pulse-dot flex-shrink-0"
-              ></span>
-              <span class="text-xs font-semibold text-slate-100 truncate group-hover:text-[#42b883] transition-colors">
-                {{ session.title }}
-              </span>
-            </div>
-
-            <div class="flex items-center gap-1 flex-shrink-0">
-              <span
-                v-if="session.id === agentStore.currentSessionId"
-                class="text-[9px] px-1.5 py-0.5 rounded-full bg-[#42b883]/20 text-[#42b883] font-semibold"
-              >
-                Aktif
-              </span>
-              <button
-                @click.stop="agentStore.deleteSession(session.id)"
-                class="w-5 h-5 rounded-md flex items-center justify-center text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors opacity-0 group-hover:opacity-100 cursor-pointer"
-                title="Hapus sesi ini"
-              >
-                <UIcon name="i-lucide-trash-2" class="size-3" />
-              </button>
-            </div>
-          </div>
-
-          <!-- Last Message Preview -->
-          <p v-if="session.lastMessage" class="text-[10px] text-slate-400 line-clamp-2 leading-relaxed">
-            {{ session.lastMessage }}
-          </p>
-
-          <!-- Footer Metadata: Message count, Model, Time -->
-          <div class="flex items-center justify-between text-[9px] text-slate-500 pt-0.5 border-t border-white/[0.04]">
-            <span class="flex items-center gap-1">
-              <UIcon name="i-lucide-message-square" class="size-2.5 text-slate-400" />
-              <span>{{ session.messageCount }} pesan</span>
-              <span>•</span>
-              <span class="text-slate-400 font-mono">{{ session.model }}</span>
-            </span>
-            <span class="font-mono text-slate-400">
-              {{ formatSessionDate(session.updatedAt) }}
-            </span>
-          </div>
-        </div>
-
-        <!-- Empty State -->
-        <div v-if="filteredSessions.length === 0" class="py-10 text-center flex flex-col items-center justify-center text-slate-500 space-y-2">
-          <UIcon name="i-lucide-history" class="size-8 text-slate-600" />
-          <p class="text-xs font-medium text-slate-400">
-            {{ sessionSearchQuery ? 'Sesi obrolan tidak ditemukan' : 'Belum ada riwayat sesi obrolan' }}
-          </p>
-          <p class="text-[10px] text-slate-500 max-w-[200px]">
-            Sesi obrolan akan otomatis tersimpan di SQLite saat Anda mulai mengirim pesan.
-          </p>
-        </div>
-      </div>
-    </div>
-
-    <!-- Compact Copilot & Autonomous Agent Header -->
-    <div class="h-9 px-3 border-b border-white/[0.06] flex items-center justify-between text-[11px] font-semibold bg-[#0b101b]/95 backdrop-blur-md">
-      <div class="flex items-center gap-2">
-        <img :src="iconImg" alt="Makarya" class="h-5 w-auto object-contain" />
-        <span class="vue-gradient-text font-bold tracking-wide text-xs">
-          Makarya AI Agent
+      class="h-9 px-3 border-b border-white/[0.06] flex items-center justify-between text-[11px] font-semibold bg-[#0b101b]/95 backdrop-blur-md flex-shrink-0">
+      <div class="flex items-center gap-1.5 flex-shrink-0">
+        <img :src="iconImg" alt="Makarya"
+          class="h-5 w-auto rounded object-contain drop-shadow-[0_0_6px_rgba(66,184,131,0.5)] cursor-pointer hover:scale-110 transition-transform"
+          title="Makarya AI Agent" />
+        <span
+          :class="['inline-block size-1.5 rounded-full', agentStore.isGenerating ? 'bg-emerald-400 animate-ping' : 'bg-[#42b883] animate-pulse']"></span>
+        <span class="text-xs font-bold text-slate-100 flex items-center gap-1">
+          <span class="agent-gradient-text">Makarya Agent</span>
         </span>
       </div>
 
-      <div class="flex items-center gap-1.5">
-        <!-- History Sessions Modal Trigger Button -->
-        <button
-          @click="handleOpenSessionsModal"
-          class="w-6 h-6 rounded-md flex items-center justify-center text-slate-400 hover:text-[#42b883] hover:bg-white/[0.06] transition-colors cursor-pointer group"
-          title="Riwayat Sesi Obrolan"
-        >
+      <div class="flex items-center gap-1">
+        <!-- Mode Switcher Badge (Agent vs Chat) -->
+        <div class="flex items-center bg-black/50 rounded-full p-0.5 border border-white/5 text-[9px] mr-0.5">
+          <button @click="agentStore.executionMode = 'agent'" :class="[
+            'px-2 py-0.5 rounded-full transition-all cursor-pointer',
+            agentStore.executionMode === 'agent' ? 'bg-[#42b883]/25 text-[#42b883] font-semibold' : 'text-slate-400 hover:text-slate-200'
+          ]" title="Makarya Agent Mode (Autonomous Tools & Actions)">
+            Agent
+          </button>
+          <button @click="agentStore.executionMode = 'chat'" :class="[
+            'px-2 py-0.5 rounded-full transition-all cursor-pointer',
+            agentStore.executionMode === 'chat' ? 'bg-[#42b883]/25 text-[#42b883] font-semibold' : 'text-slate-400 hover:text-slate-200'
+          ]" title="Makarya Chat Mode (Deep Reasoning / Q&A)">
+            Chat
+          </button>
+        </div>
+
+        <!-- Sessions / History Switcher Button -->
+        <button @click="isSessionModalOpen = !isSessionModalOpen; isModelModalOpen = false" :class="[
+          'w-6 h-6 rounded-full flex items-center justify-center transition-colors cursor-pointer group',
+          isSessionModalOpen
+            ? 'bg-[#42b883]/20 text-[#42b883] ring-1 ring-[#42b883]/40'
+            : 'text-slate-400 hover:text-[#42b883] hover:bg-white/[0.06]'
+        ]" title="Riwayat Sesi Obrolan Agen">
           <UIcon name="i-lucide-history" class="size-3.5 group-hover:rotate-[-20deg] transition-transform" />
         </button>
 
         <!-- New Chat Session Button -->
-        <button
-          @click="agentStore.createNewSession()"
-          class="w-6 h-6 rounded-md flex items-center justify-center text-slate-400 hover:text-[#42b883] hover:bg-white/[0.06] transition-colors cursor-pointer"
-          title="Mulai Sesi Obrolan Baru"
-        >
+        <button @click="agentStore.createNewSession()"
+          class="w-6 h-6 rounded-full flex items-center justify-center text-slate-400 hover:text-[#42b883] hover:bg-white/[0.06] transition-colors cursor-pointer"
+          title="Mulai Sesi Agen Baru">
           <UIcon name="i-lucide-square-pen" class="size-3.5" />
         </button>
 
         <!-- Clear Chat Button -->
-        <button
-          @click="handleClearChat"
-          class="w-6 h-6 rounded-md flex items-center justify-center text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
-          title="Bersihkan Percakapan (Hapus Chat)"
-        >
+        <button @click="agentStore.clearHistory()"
+          class="w-6 h-6 rounded-full flex items-center justify-center text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
+          title="Bersihkan Percakapan Agen">
           <UIcon name="i-lucide-trash-2" class="size-3.5" />
         </button>
 
         <!-- Close / Collapse Panel Button -->
-        <button
-          @click="workspaceStore.toggleCopilotPanel"
-          class="w-6 h-6 rounded-md flex items-center justify-center text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
-          title="Tutup Panel AI (Ctrl+B)"
-        >
+        <button @click="workspaceStore.toggleCopilotPanel()"
+          class="w-6 h-6 rounded-full flex items-center justify-center text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
+          title="Tutup Panel Agen">
           <UIcon name="i-lucide-x" class="size-3.5" />
         </button>
       </div>
     </div>
 
-    <!-- Chat Messages Scroll Area (Compact) -->
-    <div ref="messagesContainerRef" class="flex-1 overflow-y-auto p-3 text-[11px] relative flex flex-col">
-      <!-- DEFAULT HERO STATE (Gambar 2 Style, shown when messages.length === 0) -->
-      <div
-        v-if="agentStore.messages.length === 0"
-        class="my-auto flex flex-col items-center justify-center py-6 px-2 text-center select-none w-full"
-      >
-        <!-- Glow Logo Card (Gambar 2) -->
-        <div class="relative group mb-4 mx-auto flex items-center justify-center">
-          <div class="absolute -inset-1.5 bg-gradient-to-r from-[#42b883]/30 via-[#34d399]/20 to-[#42b883]/30 rounded-3xl blur-md opacity-75 group-hover:opacity-100 transition duration-500"></div>
-          <div class="relative w-20 h-20 sm:w-22 sm:h-22 rounded-2xl bg-[#0c121d] border border-[#42b883]/35 shadow-xl shadow-[#42b883]/15 flex items-center justify-center p-3 overflow-hidden">
-            <img
-              :src="iconImg"
-              alt="Makarya"
-              class="w-full h-full object-contain filter drop-shadow-[0_0_10px_rgba(66,184,131,0.6)] translate-x-1.5 translate-y-0.5"
-            />
+    <!-- Messages Container (Scrollable Area) -->
+    <div ref="messageContainer" @click="handleChatContainerClick" class="flex-1 overflow-y-auto p-3 text-[11px] relative flex flex-col custom-scrollbar">
+      <!-- DEFAULT HERO STATE (Shown when messages.length === 0) -->
+      <div v-if="agentStore.messages.length === 0"
+        class="my-auto flex flex-col items-center justify-center py-6 px-2 text-center select-none w-full">
+        <!-- Glow Logo Card -->
+        <div class="relative group mb-4 mx-auto flex items-center justify-center cursor-pointer block">
+          <div
+            class="absolute -inset-1.5 bg-gradient-to-r from-[#059669]/40 via-[#10b981]/30 to-[#34d399]/40 rounded-3xl blur-md opacity-75 group-hover:opacity-100 group-hover:scale-105 transition duration-500">
+          </div>
+          <div
+            class="relative w-20 h-20 sm:w-22 sm:h-22 rounded-2xl bg-[#091518] border border-[#42b883]/40 group-hover:border-[#42b883]/70 shadow-xl shadow-[#42b883]/20 flex items-center justify-center p-3.5 overflow-hidden transition-all">
+            <img :src="logoImg" alt="Makarya Agent"
+              class="w-full h-full object-contain filter drop-shadow-[0_0_12px_rgba(66,184,131,0.7)] group-hover:scale-110 transition-transform" />
           </div>
         </div>
 
         <!-- Title -->
-        <h2 class="text-base sm:text-lg font-bold tracking-tight text-white mb-1.5 flex items-center justify-center gap-1.5 text-center w-full">
-          <span class="vue-gradient-text">Makarya AI Agent</span>
-        </h2>
+        <div class="flex items-center justify-center gap-1.5 mb-1.5">
+          <h2
+            class="text-base sm:text-lg font-bold tracking-tight text-white flex items-center justify-center gap-1.5 text-center">
+            <span class="agent-gradient-text">Makarya AI Agent</span>
+          </h2>
+        </div>
 
         <!-- Subtitle -->
         <p class="text-[11px] text-slate-400 text-center max-w-[270px] mx-auto leading-relaxed mb-4">
-          Asisten coding cerdas terintegrasi. Sambungkan agen ke folder project kerja agar pemindaian berkas dan aksi agen terkunci cepat di dalam folder tersebut.
+          Agen pemrograman otonom terintegrasi. Mendukung eksekusi terminal, manipulasi berkas presisi, analisis kode,
+          dan penalaran cerdas.
         </p>
 
-        <!-- Target Project Connected Badge (Tampil hanya saat target sudah terhubung) -->
-        <div
-          v-if="connectedProject"
-          class="px-3 py-1.5 rounded-xl bg-white/[0.03] border border-[#42b883]/30 text-[10px] text-slate-300 flex items-center gap-2 max-w-[95%] shadow-xs"
-        >
-          <span class="w-2 h-2 rounded-full bg-[#42b883] vue-pulse-dot flex-shrink-0"></span>
+        <!-- Target Project Connected Badge -->
+        <div v-if="connectedProject"
+          class="px-3 py-1.5 rounded-xl bg-white/[0.03] border border-[#42b883]/30 text-[10px] text-slate-300 flex items-center gap-2 max-w-[95%] shadow-xs">
+          <span class="w-2 h-2 rounded-full bg-[#42b883] agent-pulse-dot flex-shrink-0"></span>
           <span class="text-slate-400 font-medium flex-shrink-0">Target:</span>
           <span class="font-mono text-[#42b883] truncate text-[10px]" :title="connectedProject.path">
             {{ connectedProject.name }}
           </span>
         </div>
-
-        <!-- Quick Action Suggestion Chips -->
-        <div class="mt-6 w-full max-w-[290px]">
-          <p class="text-[10px] text-slate-400 font-medium flex items-center justify-center gap-1.5 tracking-wide mb-2">
-            <UIcon name="i-lucide-sparkles" class="size-3 text-[#42b883]" />
-            <span>Aksi Cepat:</span>
-          </p>
-          <div class="flex flex-wrap items-center justify-center gap-1.5">
-            <button
-              @click="handleSendMessage('Jalankan syntax test pada file aktif ini.')"
-              class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-medium bg-white/[0.03] hover:bg-[#42b883]/10 border border-white/[0.08] hover:border-[#42b883]/50 text-slate-300 hover:text-white transition-all shadow-xs cursor-pointer group"
-            >
-              <UIcon name="i-lucide-check-circle-2" class="size-3 text-[#42b883] group-hover:scale-110 transition-transform" />
-              <span>Test Sintaks</span>
-            </button>
-            <button
-              @click="handleSendMessage('Jalankan git status di terminal.')"
-              class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-medium bg-white/[0.03] hover:bg-[#42b883]/10 border border-white/[0.08] hover:border-[#42b883]/50 text-slate-300 hover:text-white transition-all shadow-xs cursor-pointer group"
-            >
-              <UIcon name="i-lucide-git-branch" class="size-3 text-[#42b883] group-hover:scale-110 transition-transform" />
-              <span>Git Status</span>
-            </button>
-            <button
-              @click="handleReviewChanges"
-              class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-medium bg-white/[0.03] hover:bg-[#42b883]/10 border border-white/[0.08] hover:border-[#42b883]/50 text-slate-300 hover:text-white transition-all shadow-xs cursor-pointer group"
-            >
-              <UIcon name="i-lucide-file-diff" class="size-3 text-[#42b883] group-hover:scale-110 transition-transform" />
-              <span>Review Changes</span>
-            </button>
-          </div>
-        </div>
       </div>
 
       <!-- Messages Stream List (When messages exist) -->
-      <div v-else class="space-y-3">
-
-      <!-- Messages Stream List -->
-      <div
-        v-for="message in agentStore.messages"
-        :key="message.id"
-        class="flex flex-col space-y-1.5"
-        :class="message.role === 'user' ? 'items-end' : 'items-start'"
-      >
-        <!-- Role badge & timestamp -->
-        <div class="flex items-center gap-1.5 text-[10px] text-slate-500 px-1">
-          <span v-if="message.role === 'user'" class="font-semibold text-[#42b883] flex items-center gap-1">
-            <UIcon name="i-lucide-user" class="size-3 text-[#42b883]" />
-            Anda
-          </span>
-          <span v-else class="font-semibold text-[#42b883] flex items-center gap-1.5">
-            <img :src="iconImg" alt="Makarya" class="h-4.5 w-auto object-contain" />
-            Makarya Agent
-          </span>
-          <span>•</span>
-          <span>{{ message.timestamp }}</span>
-        </div>
-
-        <!-- User Message Bubble Container (Nuxt UI Chat Bubble - Distinct Green Style) -->
-        <div v-if="message.role === 'user'" class="flex flex-col items-end max-w-[92%] group relative">
-          <div
-            class="w-full bg-gradient-to-br from-[#185338] via-[#144730] to-[#0f3826] hover:from-[#1b5e40] hover:to-[#12432d] border border-[#42b883]/45 text-emerald-50 px-3.5 py-2 rounded-2xl rounded-tr-xs shadow-md shadow-[#42b883]/10 select-text font-normal space-y-1.5 text-[11px] transition-all"
-          >
-            <!-- Attached Images Grid -->
-            <div v-if="message.images && message.images.length > 0" class="flex flex-wrap gap-1.5 pt-0.5">
-              <img
-                v-for="(img, imgIdx) in message.images"
-                :key="imgIdx"
-                :src="img"
-                alt="User Attachment"
-                class="max-h-36 max-w-full rounded-lg border border-[#42b883]/30 object-contain cursor-pointer hover:opacity-90 transition-opacity bg-black/40"
-                @click="openImageLightbox(img)"
-              />
-            </div>
-            <!-- Message Content with Inline Antigravity Badges -->
-            <div
-              v-if="message.content"
-              class="whitespace-pre-wrap leading-relaxed text-white font-medium"
-              v-html="formatUserMessage(message.content)"
-              @click="handleUserMessageClick"
-            ></div>
-          </div>
-
-          <!-- User Quick Actions: Resend / Revert, Edit Prompt & Copy Text -->
-          <div class="flex items-center gap-1 mt-1 opacity-0 group-hover:opacity-100 transition-opacity select-none">
-            <button
-              type="button"
-              @click="handleResendUserMessage(message)"
-              :disabled="agentStore.isGenerating"
-              class="flex items-center gap-1 px-2 py-0.5 rounded-lg text-[9px] font-medium text-slate-400 hover:text-[#42b883] hover:bg-white/[0.06] border border-white/[0.06] transition-colors cursor-pointer shadow-2xs disabled:opacity-40 disabled:cursor-not-allowed"
-              title="Kirim ulang prompt (batalkan perubahan file & hapus respon sebelumnya)"
-            >
-              <UIcon name="i-lucide-undo" class="size-2.5" />
-              <span>Resend</span>
-            </button>
-            <button
-              type="button"
-              @click="handleEditUserMessage(message)"
-              class="flex items-center gap-1 px-2 py-0.5 rounded-lg text-[9px] font-medium text-slate-400 hover:text-[#42b883] hover:bg-white/[0.06] border border-white/[0.06] transition-colors cursor-pointer shadow-2xs"
-              title="Edit prompt ini di input chat"
-            >
-              <UIcon name="i-lucide-pencil" class="size-2.5" />
-              <span>Edit</span>
-            </button>
-            <button
-              type="button"
-              @click="handleCopyMessage(message)"
-              class="flex items-center gap-1 px-2 py-0.5 rounded-lg text-[9px] font-medium text-slate-400 hover:text-[#42b883] hover:bg-white/[0.06] border border-white/[0.06] transition-colors cursor-pointer shadow-2xs"
-              title="Salin isi prompt pengguna"
-            >
-              <UIcon
-                :name="copiedMessageId === message.id ? 'i-lucide-check' : 'i-lucide-copy'"
-                :class="copiedMessageId === message.id ? 'text-[#42b883]' : ''"
-                class="size-2.5"
-              />
-              <span>{{ copiedMessageId === message.id ? 'Tersalin' : 'Salin' }}</span>
-            </button>
-          </div>
-        </div>
-
-        <!-- Assistant Container (Nuxt UI AI Assistant) -->
-        <div
-          v-else
-          class="w-full space-y-1.5 select-text"
-        >
-          <!-- 1. Thinking Dropdown Header & Content (ChatReasoning) -->
-          <div
-            v-if="message.thoughts || message.isThinking || message.thinkingDurationSeconds"
-            class="space-y-0.5"
-          >
-            <button
-              @click="toggleThought(message.id, isThoughtExpanded(message.id, message.isThinking))"
-              class="flex items-center gap-1.5 text-[10px] transition-colors cursor-pointer select-none font-medium py-0.5"
-              :class="message.isThinking ? 'vue-shimmer-text font-semibold' : 'text-slate-400 hover:text-[#42b883]'"
-            >
-              <UIcon v-if="message.isThinking" name="i-lucide-loader-2" class="size-3 text-[#42b883] animate-spin" />
-              <UIcon v-else name="i-lucide-sparkles" class="size-3 text-[#42b883]" />
-              <span v-if="message.isThinking">Thinking for {{ message.thinkingDurationSeconds || 1 }}s...</span>
-              <span v-else>Thought for {{ message.thinkingDurationSeconds || 1 }}s</span>
-              <UIcon
-                :name="isThoughtExpanded(message.id, message.isThinking) ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'"
-                class="size-3 text-slate-400 ml-0.5"
-              />
-            </button>
-
-            <!-- Collapsible Thinking Text Box -->
-            <div
-              v-show="isThoughtExpanded(message.id, message.isThinking)"
-              class="pl-2.5 border-l-2 border-[#42b883]/60 bg-[#0e1626]/80 rounded-r-lg py-1.5 pr-2.5 text-slate-400 text-[10px] leading-relaxed select-text space-y-0.5 my-1 shadow-inner border-y border-r border-white/[0.04]"
-            >
-              <p class="whitespace-pre-wrap font-sans text-slate-300/90">
-                {{ message.thoughts || 'Current analysis and execution plan is being formulated...' }}
-              </p>
-            </div>
-          </div>
-
-          <!-- 2. Tool Execution Cards (Nuxt UI ChatTool - Child Processes) -->
-          <div
-            v-if="message.toolCalls && message.toolCalls.length > 0"
-            class="space-y-1 my-1"
-          >
-            <div
-              v-for="tool in message.toolCalls"
-              :key="tool.id"
-              class="rounded-xl border border-white/[0.08] bg-[#0c111c] overflow-hidden text-[10px] shadow-sm"
-            >
-              <!-- Tool Card Header -->
-              <div
-                @click="toggleToolOutput(tool.id)"
-                class="px-2.5 py-1.5 bg-[#0e1626]/90 flex items-center justify-between cursor-pointer hover:bg-[#131d2e] transition-colors select-none"
-              >
-                <div class="flex items-center gap-1.5 truncate pr-2">
-                  <UIcon :name="getToolIcon(tool.name).icon" :class="[getToolIcon(tool.name).color, 'size-3.5 flex-shrink-0']" />
-                  <span class="font-mono text-slate-200 truncate font-medium">
-                    {{ getToolDisplayLabel(tool) }}
-                  </span>
-                </div>
-
-                <div class="flex items-center gap-1.5 flex-shrink-0">
-                  <!-- Status Pill Badge in Pill Style -->
-                  <span
-                    v-if="tool.status === 'waiting_approval'"
-                    class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-medium bg-amber-500/15 text-amber-300 border border-amber-500/35 shadow-xs animate-pulse"
-                  >
-                    <UIcon name="i-lucide-shield-alert" class="size-2.5 text-amber-400" />
-                    <span>Minta Izin</span>
-                  </span>
-                  <span
-                    v-else-if="tool.status === 'running'"
-                    class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-medium bg-cyan-500/10 text-cyan-300 border border-cyan-500/25 shadow-xs"
-                  >
-                    <UIcon name="i-lucide-loader-2" class="size-2.5 animate-spin text-cyan-400" />
-                    <span>Menjalankan</span>
-                  </span>
-                  <span
-                    v-else-if="tool.status === 'success'"
-                    class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-medium bg-[#42b883]/10 text-[#42b883] border border-[#42b883]/25 shadow-xs"
-                  >
-                    <UIcon name="i-lucide-check-circle-2" class="size-2.5 text-[#42b883]" />
-                    <span>Berhasil</span>
-                    <span v-if="tool.durationMs" class="text-slate-400 text-[8px] ml-0.5">({{ tool.durationMs }}ms)</span>
-                  </span>
-                  <span
-                    v-else-if="tool.status === 'error'"
-                    class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-medium bg-rose-500/10 text-rose-300 border border-rose-500/25 shadow-xs"
-                  >
-                    <UIcon name="i-lucide-x-circle" class="size-2.5 text-rose-400" />
-                    <span>Gagal</span>
-                  </span>
-
-                  <!-- Collapse Icon -->
-                  <UIcon
-                    :name="isToolExpanded(tool) ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'"
-                    class="size-3 text-slate-400 ml-0.5"
-                  />
-                </div>
-              </div>
-
-              <!-- Approval Action Box (Ketika Auto Execution = Ask Before atau Review Policy = Always Ask) -->
-              <div
-                v-if="tool.status === 'waiting_approval'"
-                class="p-2.5 bg-[#0a0f19] border-t border-amber-500/25 space-y-2 select-none animate-in fade-in duration-150"
-              >
-                <!-- Top Header & Command / File Block -->
-                <div class="flex items-start gap-2">
-                  <div class="w-5 h-5 rounded-md bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 flex-shrink-0 mt-0.5">
-                    <UIcon name="i-lucide-shield-alert" class="size-3" />
-                  </div>
-                  <div class="flex-1 min-w-0">
-                    <div class="flex items-center justify-between gap-1.5">
-                      <span class="font-semibold text-amber-300 text-[10px]">
-                        {{ tool.name === 'write_file' ? 'Konfirmasi Modifikasi Berkas' : (tool.name === 'execute_command' ? 'Konfirmasi Eksekusi Terminal' : 'Konfirmasi Aksi Tool') }}
-                      </span>
-                      <span class="text-[8px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 font-mono flex-shrink-0">
-                        {{ tool.name === 'write_file' ? 'Always Ask' : 'Ask Before' }}
-                      </span>
-                    </div>
-                    <div
-                      class="mt-1 px-2 py-1 rounded-md bg-[#070b12] border border-white/[0.08] font-mono text-[10px] text-emerald-300 font-medium truncate flex items-center gap-1.5 shadow-inner"
-                      :title="tool.name === 'execute_command' ? tool.args?.command : tool.args?.filePath"
-                    >
-                      <span v-if="tool.name === 'execute_command'" class="text-slate-500 select-none flex-shrink-0">$</span>
-                      <UIcon v-else-if="tool.name === 'write_file'" name="i-lucide-file-pen" class="size-3 text-emerald-400 flex-shrink-0" />
-                      <UIcon v-else name="i-lucide-wrench" class="size-3 text-slate-400 flex-shrink-0" />
-                      <span class="truncate">
-                        {{ tool.name === 'execute_command' ? (tool.args?.command || getToolDisplayLabel(tool)) : (tool.args?.filePath || getToolDisplayLabel(tool)) }}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                <!-- Action Buttons: Antigravity Capsule Style (Matching Gambar 2) -->
-                <div class="flex items-center gap-1.5 p-1 rounded-full bg-[#080d16] border border-white/[0.08] shadow-inner">
-                  <!-- Accept Button -->
-                  <button
-                    type="button"
-                    @click.stop="agentStore.approveToolCall(tool.id, true)"
-                    class="flex-1 py-1.5 px-3 rounded-full bg-[#34c784] hover:bg-[#2eb376] text-slate-950 font-semibold text-[11px] flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer hover:brightness-105 active:scale-95"
-                    title="Accept & Jalankan Perintah (Alt+Enter)"
-                  >
-                    <span class="tracking-tight">Accept</span>
-                    <span class="px-1.5 py-0.5 rounded-full bg-black/20 text-slate-950 font-mono text-[9px] font-bold leading-none select-none">Alt+↵</span>
-                  </button>
-
-                  <!-- Reject Button -->
-                  <button
-                    type="button"
-                    @click.stop="agentStore.approveToolCall(tool.id, false)"
-                    class="flex-1 py-1.5 px-3 rounded-full bg-[#24131d] hover:bg-[#321725] border border-[#78283d] text-[#f7a8b8] hover:text-white font-semibold text-[11px] flex items-center justify-center gap-1.5 transition-all cursor-pointer active:scale-95"
-                    title="Reject / Batalkan Perintah (Shift+Alt+Backspace)"
-                  >
-                    <span class="tracking-tight">Reject</span>
-                    <span class="px-1.5 py-0.5 rounded-full bg-white/10 text-[#f7a8b8] font-mono text-[9px] font-medium leading-none select-none">Shift+Alt+⌫</span>
-                  </button>
-                </div>
-              </div>
-
-              <!-- Tool Output Accordion Body -->
-              <div
-                v-show="isToolExpanded(tool)"
-                class="border-t border-[#35495e]/40 bg-[#090d14] p-2 space-y-1"
-              >
-                <div class="flex items-center justify-between text-[9px] text-slate-500 pb-0.5">
-                  <span>Output Terminal / Berkas:</span>
-                  <button
-                    v-if="tool.output"
-                    @click.stop="handleCopyText(tool.output, 'Output tool')"
-                    class="hover:text-[#42b883] flex items-center gap-1 text-[8px] transition-colors cursor-pointer"
-                  >
-                    <UIcon name="i-lucide-copy" class="size-2.5" /> Salin Output
-                  </button>
-                </div>
-                <pre
-                  class="font-mono text-[9px] text-slate-300 overflow-x-auto p-2 bg-[#0c111a] rounded-md border border-white/[0.06] leading-relaxed whitespace-pre-wrap max-h-36 overflow-y-auto"
-                ><code>{{ tool.output || '(Sedang mengeksekusi...)' }}</code></pre>
-              </div>
-            </div>
-          </div>
-
-          <!-- 3. "Working..." / Live Process Status indicator placed ALWAYS BELOW Child Processes (Antigravity Style) -->
-          <div
-            v-if="message.isStreaming && message.activeAction"
-            class="flex items-center gap-2 text-[10px] font-medium py-1 px-1 text-slate-300 animate-in fade-in duration-200"
-          >
-            <span class="inline-block w-2 h-2 rounded-full bg-[#42b883] vue-pulse-dot flex-shrink-0"></span>
-            <span class="vue-shimmer-text font-medium text-slate-200 tracking-wide">
-              {{ message.activeAction }}
+      <div v-else class="space-y-2.5">
+        <div v-for="msg in agentStore.messages" :key="msg.id"
+          :class="['flex flex-col space-y-1', msg.role === 'user' ? 'items-end' : 'items-start']">
+          <!-- Role & Time Header for User -->
+          <div v-if="msg.role === 'user'" class="flex items-center gap-1.5 text-[9px] text-slate-400 px-1 mb-0.5">
+            <span class="font-medium text-emerald-300">Anda</span>
+            <span v-if="msg.timestamp" class="text-[9px] text-slate-400 font-mono">
+              {{ formatMessageTime(msg.timestamp) }}
             </span>
           </div>
 
-          <!-- Interactive Antigravity Implementation Plan Card -->
-          <ImplementationPlanCard
-            v-if="getMessageImplementationPlan(message)"
-            :plan="getMessageImplementationPlan(message)!"
-            :is-generating="agentStore.isGenerating"
-            @execute-plan="handleExecutePlanFromCard"
-            @request-revision="handleRequestPlanRevision"
-          />
+          <!-- Role & Time Header for Assistant -->
+          <div v-else class="flex items-center gap-1.5 text-[9px] text-slate-400 px-1 mb-0.5">
+            <img :src="iconImg" alt="Makarya" class="size-2.5 rounded-xs object-contain" />
+            <span class="font-medium text-[#42b883]">Makarya Agent</span>
+            <span v-if="msg.timestamp" class="text-[9px] text-slate-400 font-mono">
+              {{ formatMessageTime(msg.timestamp) }}
+            </span>
+          </div>
 
-          <!-- 4. Final Markdown Content & Code Blocks (Nuxt UI ChatMessage) -->
-          <div
-            v-if="message.content"
-            class="bg-[#0e1626]/85 hover:bg-[#0e1626] border border-white/[0.06] text-slate-200 px-3.5 py-2.5 rounded-2xl rounded-tl-xs shadow-md space-y-1.5 mt-0.5 select-text transition-colors"
-          >
-            <div
-              v-for="(block, blockIndex) in parseMarkdownBlocks(message.content)"
-              :key="blockIndex"
-              class="space-y-1"
-            >
-              <!-- Text Segment -->
-              <div
-                v-if="block.type === 'text'"
-                class="leading-relaxed prose-invert text-[11px] text-slate-200 break-words"
-                v-html="renderMarkdown(block.content)"
-              ></div>
-
-              <!-- Code Block with Interactive Action Buttons -->
-              <div
-                v-else-if="block.type === 'code'"
-                class="rounded-xl overflow-hidden border border-white/[0.08] bg-[#070b12] my-2 shadow-inner"
-              >
-                <!-- Code Block Header -->
-                <div class="px-3 py-1.5 bg-[#0e1626] border-b border-white/[0.06] flex items-center justify-between text-[10px] text-slate-400">
-                  <span class="font-mono text-[9px] text-[#42b883] font-semibold uppercase tracking-wider">
-                    {{ block.language || 'code' }}
+          <!-- Message Bubble (Emerald Gradient for User, Dark Card for Assistant) -->
+          <div :class="[
+            'p-2.5 rounded-xl max-w-[96%] leading-relaxed break-words shadow-sm transition-all w-full',
+            msg.role === 'user'
+              ? 'bg-gradient-to-br from-[#059669] to-[#047857] text-white rounded-tr-xs border border-emerald-400/30 text-[11px]'
+              : 'bg-[#0b131e]/90 text-slate-200 rounded-tl-xs border border-white/[0.08] text-[11px]'
+          ]">
+            <!-- 1. Live Thinking Process Box -->
+            <div v-if="msg.thoughts"
+              class="mb-2 rounded-lg bg-black/40 border border-[#42b883]/20 overflow-hidden shadow-xs">
+              <button @click="toggleThinkingExpand(msg.id, msg)"
+                class="w-full px-2 py-1 flex items-center justify-between text-[10px] text-emerald-300 font-semibold bg-[#42b883]/10 hover:bg-[#42b883]/15 transition-all cursor-pointer">
+                <span class="flex items-center gap-1">
+                  <UIcon name="i-lucide-sparkles" class="size-3 text-[#42b883]"
+                    :class="{ 'animate-spin': msg.isStreaming || msg.isThinking }" />
+                  Penalaran AI (Thinking)
+                  <span v-if="msg.thinkingDurationSeconds !== undefined"
+                    class="text-[9px] font-mono text-emerald-400/70 font-normal">
+                    ({{ msg.thinkingDurationSeconds }}s)
                   </span>
-                  <div class="flex items-center gap-1.5">
-                    <!-- Copy Code Button (Pill Style) -->
-                    <button
-                      @click="handleCopyText(block.content, 'Kode')"
-                      class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[9px] font-medium bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] hover:border-[#42b883]/40 text-slate-300 hover:text-white transition-all cursor-pointer group"
-                      title="Salin Kode ke Clipboard"
-                    >
-                      <UIcon name="i-lucide-copy" class="size-2.5 text-slate-400 group-hover:text-[#42b883] transition-colors" />
-                      <span>Salin</span>
-                    </button>
+                </span>
+                <UIcon :name="isThinkingExpanded(msg) ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'"
+                  class="size-3 text-emerald-400" />
+              </button>
+              <div v-if="isThinkingExpanded(msg)"
+                class="p-2 text-[10px] font-mono text-emerald-100/90 whitespace-pre-wrap bg-[#061214]/95 border-t border-[#42b883]/15 leading-relaxed max-h-40 overflow-y-auto custom-scrollbar">
+                {{ msg.thoughts }}
+                <span v-if="msg.isStreaming"
+                  class="inline-block w-1 h-3 bg-[#42b883] animate-pulse ml-0.5 align-middle"></span>
+              </div>
+            </div>
+
+            <!-- 2. Implementation Plan Card (if any) -->
+            <div v-if="getMessageImplementationPlan(msg)" class="mb-2">
+              <ImplementationPlanCard :plan="getMessageImplementationPlan(msg)!"
+                @execute-plan="handleExecutePlanFromCard" @request-revision="handleRequestPlanRevision" />
+            </div>
+
+            <!-- 2b. Interactive Question Card -->
+            <div v-if="msg.pendingQuestion"
+              class="mb-2 p-2.5 rounded-lg bg-[#061214] border-l-2 border-l-emerald-500 border border-emerald-500/25 shadow-sm">
+              <div
+                class="flex items-center gap-1 text-[9px] text-emerald-400 font-semibold uppercase tracking-wider mb-1">
+                <UIcon name="i-lucide-help-circle" class="size-3" />
+                <span>Pertanyaan Klarifikasi Agen</span>
+              </div>
+
+              <div class="text-[11px] font-semibold text-slate-100 mb-2 leading-snug">
+                {{ msg.pendingQuestion.question }}
+              </div>
+
+              <!-- Options List (Compact) -->
+              <div class="space-y-1 mb-2">
+                <button v-for="(opt, oIdx) in msg.pendingQuestion.options" :key="oIdx"
+                  @click="!msg.pendingQuestion.selectedOption && selectOption(msg.id, opt)"
+                  :disabled="Boolean(msg.pendingQuestion.selectedOption)" :class="[
+                    'w-full text-left px-2 py-1.5 rounded-md border text-[10.5px] transition-all flex items-start gap-2 cursor-pointer',
+                    (selectedAnswers[msg.id] === opt || msg.pendingQuestion.selectedOption === opt)
+                      ? 'bg-emerald-600/30 border-emerald-400 text-emerald-100 font-semibold shadow-xs ring-1 ring-emerald-400/40'
+                      : 'bg-black/30 border-white/5 text-slate-300 hover:bg-emerald-950/30 hover:border-emerald-500/30'
+                  ]">
+                  <span
+                    class="w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold mt-0.2 flex-shrink-0"
+                    :class="(selectedAnswers[msg.id] === opt || msg.pendingQuestion.selectedOption === opt) ? 'bg-emerald-500 text-white' : 'bg-white/10 text-slate-400'">
+                    {{ oIdx + 1 }}
+                  </span>
+                  <span class="flex-1 leading-tight">{{ opt }}</span>
+                </button>
+              </div>
+
+              <!-- Custom Write-in Answer -->
+              <div v-if="!msg.pendingQuestion.selectedOption" class="mb-2">
+                <input v-model="customAnswers[msg.id]" @input="selectedAnswers[msg.id] = ''" type="text"
+                  placeholder="Atau ketik jawaban sendiri..."
+                  class="w-full px-2 py-1 text-[10px] bg-black/40 border border-white/10 rounded-md text-slate-100 placeholder-slate-500 focus:outline-none focus:border-emerald-400" />
+              </div>
+
+              <!-- Submit Button / Selected Badge -->
+              <div v-if="!msg.pendingQuestion.selectedOption" class="flex items-center justify-end">
+                <button @click="submitAnswer(msg.id)"
+                  :disabled="!selectedAnswers[msg.id] && !customAnswers[msg.id]?.trim()"
+                  class="px-3 py-1 rounded-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-semibold text-[10px] transition-all cursor-pointer flex items-center gap-1 active:scale-95">
+                  <UIcon name="i-lucide-check" class="size-3" />
+                  <span>Kirim</span>
+                </button>
+              </div>
+              <div v-else
+                class="text-[9.5px] text-emerald-400 font-medium flex items-center gap-1 pt-1 border-t border-white/10">
+                <UIcon name="i-lucide-check-circle" class="size-3 text-emerald-400" />
+                <span>Pilihan: <strong>{{ msg.pendingQuestion.selectedOption }}</strong></span>
+              </div>
+            </div>
+
+            <!-- 3. Tool Calls Visual Cards -->
+            <div v-if="msg.toolCalls && msg.toolCalls.length > 0" class="space-y-1 mb-2">
+              <div v-for="tool in msg.toolCalls" :key="tool.id"
+                class="rounded-lg bg-black/40 border border-[#42b883]/20 overflow-hidden text-[10px]">
+                <!-- Accordion Header -->
+                <div @click="toggleToolExpand(tool.id, tool.status)"
+                  class="px-2 py-1 flex items-center justify-between text-emerald-300 font-mono cursor-pointer hover:bg-emerald-500/5 transition-colors">
+                  <div class="flex items-center gap-1.5 truncate max-w-[200px]">
+                    <UIcon :name="getToolIcon(tool.name)" class="size-3 text-[#42b883] flex-shrink-0"
+                      :class="{ 'animate-spin': tool.status === 'running' }" />
+                    <span class="font-semibold text-emerald-300">{{ tool.name }}</span>
+                    <span v-if="getToolSummaryArg(tool)" class="text-[9px] text-slate-400 truncate opacity-80">
+                      {{ getToolSummaryArg(tool) }}
+                    </span>
+                  </div>
+                  <div class="flex items-center gap-1 flex-shrink-0">
+                    <span :class="[
+                      'px-2 py-0.5 rounded-full text-[8.5px] font-semibold',
+                      tool.status === 'success' || (tool.status as string) === 'completed'
+                        ? 'bg-emerald-500/15 text-emerald-300'
+                        : tool.status === 'running'
+                          ? 'bg-amber-500/20 text-amber-300 animate-pulse'
+                          : tool.status === 'waiting_approval'
+                            ? 'bg-indigo-500/20 text-indigo-300'
+                            : 'bg-rose-500/20 text-rose-300'
+                    ]">
+                      {{ tool.status === 'running' ? 'Memproses...' : tool.status === 'waiting_approval' ? 'Izin...' :
+                        `${tool.durationMs || 1}ms` }}
+                    </span>
+                    <UIcon :name="isToolExpanded(tool) ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'"
+                      class="size-3 text-slate-500" />
                   </div>
                 </div>
 
-                <!-- Code Content -->
-                <pre class="p-2.5 text-[10px] font-mono text-slate-200 overflow-x-auto leading-relaxed select-text whitespace-pre"><code>{{ block.content.trim() }}</code></pre>
-              </div>
-            </div>
-          </div>
-
-          <!-- 5. Files Changed Review Card (Nuxt UI Card) -->
-          <div
-            v-if="message.modifiedFiles && message.modifiedFiles.length > 0"
-            class="rounded-xl bg-[#0e1626]/95 border border-white/[0.08] shadow-md my-1 select-none overflow-hidden"
-          >
-            <!-- Card Bar -->
-            <div
-              class="p-2.5 flex items-center justify-between cursor-pointer hover:bg-[#131d2e]/80 transition-colors"
-              @click="toggleMessageFilesExpanded(message.id)"
-              title="Klik untuk melihat daftar berkas yang diubah"
-            >
-              <div class="flex items-center gap-1.5 text-[10px]">
-                <UIcon name="i-lucide-file-diff" class="size-3.5 text-[#42b883]" />
-                <span class="font-semibold text-slate-200">
-                  {{ message.modifiedFiles.length }} file{{ message.modifiedFiles.length > 1 ? 's' : '' }} changed
-                </span>
-                <span class="font-mono text-[9px] text-[#42b883] font-bold">
-                  +{{ message.modifiedFiles.reduce((acc, f) => acc + f.additions, 0) }}
-                </span>
-                <span class="font-mono text-[9px] text-rose-400 font-bold">
-                  -{{ message.modifiedFiles.reduce((acc, f) => acc + f.deletions, 0) }}
-                </span>
-                <UIcon
-                  name="i-lucide-chevron-right"
-                  class="size-3 text-slate-500 transition-transform duration-200 ml-0.5"
-                  :class="{ 'rotate-90': expandedMessageFiles[message.id] }"
-                />
-              </div>
-              <button
-                @click.stop="handleReviewMessageFiles(message.modifiedFiles)"
-                class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-[#42b883] hover:bg-[#34d399] text-[#090d14] shadow-xs shadow-[#42b883]/30 transition-all cursor-pointer active:scale-95"
-                title="Buka dan tinjau perubahan diff di Monaco Editor"
-              >
-                <UIcon name="i-lucide-eye" class="size-3" />
-                <span>Review</span>
-              </button>
-            </div>
-
-            <!-- Expandable File List in Message -->
-            <div
-              v-if="expandedMessageFiles[message.id]"
-              class="border-t border-white/[0.06] divide-y divide-white/[0.04] bg-[#090d14]/70 text-[10px]"
-            >
-              <div
-                v-for="file in message.modifiedFiles"
-                :key="file.filePath"
-                @click="openFileWithDiff(file)"
-                class="px-3 py-2 flex items-center justify-between hover:bg-[#131d2e] cursor-pointer group transition-colors"
-                title="Klik untuk membuka berkas dengan tampilan diff"
-              >
-                <div class="flex items-center gap-1.5 min-w-0 pr-1.5">
-                  <span class="w-1.5 h-1.5 rounded-full bg-[#42b883] flex-shrink-0"></span>
-                  <span class="font-semibold text-slate-200 group-hover:text-[#42b883] truncate transition-colors">
-                    {{ file.fileName }}
-                  </span>
-                  <span class="font-mono text-[9px] text-slate-500 truncate">
-                    {{ formatRelativePath(file.filePath) }}
-                  </span>
+                <!-- Output Body -->
+                <div v-if="isToolExpanded(tool)"
+                  class="p-1.5 border-t border-[#42b883]/15 bg-black/70 text-[9.5px] text-slate-300 font-mono whitespace-pre-wrap max-h-32 overflow-y-auto custom-scrollbar">
+                  <div v-if="tool.status === 'running'"
+                    class="flex items-center gap-1.5 text-amber-400/90 py-0.5 animate-pulse">
+                    <UIcon name="i-lucide-loader-2" class="size-3 animate-spin text-amber-400" />
+                    <span>Sedang mengeksekusi aksi agen...</span>
+                  </div>
+                  <div v-else-if="tool.output">
+                    {{ tool.output }}
+                  </div>
+                  <div v-else class="text-slate-500 italic">
+                    (Tidak ada output teks dari aksi)
+                  </div>
                 </div>
-                <div class="flex items-center gap-1.5 flex-shrink-0">
-                  <span class="font-mono text-[9px]">
-                    <span class="text-[#42b883] font-semibold">+{{ file.additions }}</span>
-                    <span class="text-rose-400 ml-0.5 font-semibold">-{{ file.deletions }}</span>
-                  </span>
-                  <button
-                    @click.stop="openFileWithDiff(file)"
-                    class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-medium bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] hover:border-[#42b883]/40 text-slate-300 hover:text-white transition-all cursor-pointer"
-                  >
-                    <UIcon name="i-lucide-arrow-up-right" class="size-2.5 text-[#42b883]" />
-                    <span>Buka</span>
+              </div>
+            </div>
+
+            <!-- 4. Main Markdown Content -->
+            <div v-if="msg.content" class="space-y-1.5">
+              <template v-for="(block, bIdx) in parseMarkdownBlocks(msg.content)" :key="bIdx">
+                <!-- Text Block -->
+                <div v-if="block.type === 'text'" v-html="formatInlineMarkdown(block.content)"
+                  class="leading-relaxed whitespace-pre-wrap break-words text-[11px]"></div>
+
+                <!-- Code Fence Block -->
+                <div v-else-if="block.type === 'code'"
+                  class="my-1.5 rounded-lg bg-[#060c14] border border-white/10 overflow-hidden font-mono text-[10px]">
+                  <div
+                    class="h-6 px-2 bg-white/[0.03] border-b border-white/5 flex items-center justify-between text-slate-400">
+                    <span class="text-[9px] uppercase font-semibold text-[#42b883]">{{ block.language || 'code'
+                      }}</span>
+                    <div class="flex items-center gap-1">
+                      <button @click="copyCode(block.content, `${msg.id}-${bIdx}`)"
+                        class="px-2 py-0.5 rounded-full bg-white/5 hover:bg-white/10 text-[9px] text-slate-300 transition-all flex items-center gap-0.5 cursor-pointer active:scale-95">
+                        <UIcon :name="copiedIndex === `${msg.id}-${bIdx}` ? 'i-lucide-check' : 'i-lucide-copy'"
+                          class="size-2.5" />
+                        <span>{{ copiedIndex === `${msg.id}-${bIdx}` ? 'Tersalin' : 'Salin' }}</span>
+                      </button>
+                      <button @click="applyToEditor(block.content)"
+                        class="px-2 py-0.5 rounded-full bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-200 text-[9px] transition-all flex items-center gap-0.5 cursor-pointer active:scale-95"
+                        title="Terapkan ke Editor">
+                        <UIcon name="i-lucide-arrow-down-to-line" class="size-2.5" />
+                        <span>Terapkan</span>
+                      </button>
+                    </div>
+                  </div>
+                  <pre
+                    class="p-2 overflow-x-auto custom-scrollbar text-slate-200 leading-normal font-mono"><code>{{ block.content }}</code></pre>
+                </div>
+              </template>
+            </div>
+
+            <!-- 5. Empty State Fallback -->
+            <div
+              v-else-if="!msg.isStreaming && !msg.thoughts && (!msg.toolCalls || msg.toolCalls.length === 0) && msg.role === 'assistant'"
+              class="text-[10px] text-slate-400 italic py-1">
+              (Tidak ada respons dari model yang dipilih. Silakan coba pilih model lain atau kirim ulang pesan).
+            </div>
+
+            <!-- 6. Streaming Indicator & Live Status Pill -->
+            <div v-if="msg.isStreaming" class="flex items-center gap-1.5 pt-1 text-[9.5px] text-[#42b883] font-mono">
+              <span class="inline-block size-1.5 rounded-full bg-[#42b883] animate-ping"></span>
+              <span class="text-emerald-300 font-medium">{{ msg.activeAction || 'Mengetik respons...' }}</span>
+            </div>
+
+            <!-- 7. Pending Approval Card for Tool Calls -->
+            <div v-if="msg.toolCalls?.some((t) => t.status === 'waiting_approval')"
+              class="mt-2 p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30">
+              <div class="text-[10px] font-semibold text-amber-300 flex items-center gap-1 mb-1">
+                <UIcon name="i-lucide-shield-alert" class="size-3 text-amber-400" />
+                Izin Diperlukan untuk Eksekusi Perintah
+              </div>
+              <div v-for="wTool in msg.toolCalls.filter((t) => t.status === 'waiting_approval')" :key="wTool.id"
+                class="space-y-1.5 my-1">
+                <p class="text-[9.5px] text-slate-300 leading-snug font-mono">
+                  {{ wTool.name }}: {{ JSON.stringify(wTool.args) }}
+                </p>
+                <div class="flex items-center gap-2 pt-1">
+                  <button @click="agentStore.approveToolCall(wTool.id, true)"
+                    class="px-3.5 py-1 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-[9.5px] shadow-xs cursor-pointer transition-all active:scale-95">
+                    Setujui
+                  </button>
+                  <button @click="agentStore.approveToolCall(wTool.id, false)"
+                    class="px-3.5 py-1 rounded-full bg-white/10 hover:bg-white/15 text-slate-300 text-[9.5px] cursor-pointer transition-all active:scale-95">
+                    Tolak
                   </button>
                 </div>
               </div>
             </div>
           </div>
 
-          <!-- Assistant Actions Footer: Copy response -->
-          <div
-            v-if="!message.isStreaming && message.content"
-            class="flex items-center gap-1.5 pt-0.5 opacity-60 hover:opacity-100 transition-opacity select-none"
-          >
-            <button
-              type="button"
-              @click="handleCopyMessage(message)"
-              class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[9px] font-medium text-slate-400 hover:text-[#42b883] hover:bg-white/[0.06] border border-white/[0.06] transition-colors cursor-pointer shadow-2xs"
-              title="Salin seluruh respons balasan Agen"
-            >
-              <UIcon
-                :name="copiedMessageId === message.id ? 'i-lucide-check' : 'i-lucide-copy'"
-                :class="copiedMessageId === message.id ? 'text-[#42b883]' : ''"
-                class="size-2.5"
-              />
-              <span>{{ copiedMessageId === message.id ? 'Tersalin' : 'Salin Pesan' }}</span>
-            </button>
+          <!-- Actions Toolbar Under User Prompt -->
+          <div v-if="msg.role === 'user'"
+            class="flex items-center justify-end w-full text-[9px] text-slate-400 px-1 pt-0.5">
+            <div class="flex items-center gap-1 opacity-80 hover:opacity-100 transition-opacity">
+              <button @click="handleResendPrompt(msg.content)" :disabled="agentStore.isGenerating"
+                class="px-2 py-0.5 rounded-full bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 hover:text-emerald-300 border border-white/[0.06] hover:border-[#42b883]/30 transition-all cursor-pointer flex items-center gap-0.5 active:scale-95 disabled:opacity-40"
+                title="Kirim ulang prompt (Resend)">
+                <UIcon name="i-lucide-rotate-cw" class="size-2.5" />
+                <span class="text-[8.5px]">Resend</span>
+              </button>
+              <button @click="handleEditPrompt(msg.content)"
+                class="px-2 py-0.5 rounded-full bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 hover:text-emerald-300 border border-white/[0.06] hover:border-[#42b883]/30 transition-all cursor-pointer flex items-center gap-0.5 active:scale-95"
+                title="Edit prompt di kolom input">
+                <UIcon name="i-lucide-pencil" class="size-2.5" />
+                <span class="text-[8.5px]">Edit</span>
+              </button>
+              <button @click="copyMessageContent(msg.content, msg.id)"
+                class="px-2 py-0.5 rounded-full bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 hover:text-white border border-white/[0.06] hover:border-[#42b883]/30 transition-all cursor-pointer flex items-center gap-0.5 active:scale-95"
+                title="Salin prompt">
+                <UIcon :name="copiedIndex === msg.id ? 'i-lucide-check' : 'i-lucide-copy'" class="size-2.5"
+                  :class="copiedIndex === msg.id ? 'text-[#42b883]' : ''" />
+                <span class="text-[8.5px]">{{ copiedIndex === msg.id ? 'Tersalin' : 'Salin' }}</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Actions Toolbar Under Assistant Response -->
+          <div v-if="msg.role === 'assistant' && msg.content && !msg.isStreaming"
+            class="flex items-center justify-between w-full text-[9px] text-slate-400 px-1 pt-0.5">
+            <div class="flex items-center gap-1.5">
+              <button @click="copyMessageContent(msg.content, msg.id)"
+                class="px-2.5 py-0.5 rounded-full bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 hover:text-[#42b883] border border-white/[0.06] hover:border-[#42b883]/30 transition-all cursor-pointer flex items-center gap-1 active:scale-95"
+                title="Salin isi seluruh respon Agen">
+                <UIcon :name="copiedIndex === msg.id ? 'i-lucide-check' : 'i-lucide-copy'" class="size-2.5"
+                  :class="copiedIndex === msg.id ? 'text-[#42b883]' : ''" />
+                <span class="text-[8.5px] font-medium">{{ copiedIndex === msg.id ? 'Tersalin' : 'Salin' }}</span>
+              </button>
+
+              <button @click="handleRegenerateResponse(msg.id)" :disabled="agentStore.isGenerating"
+                class="px-2.5 py-0.5 rounded-full bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 hover:text-emerald-300 border border-white/[0.06] hover:border-[#42b883]/30 transition-all cursor-pointer flex items-center gap-1 active:scale-95 disabled:opacity-40"
+                title="Buat ulang respon ini (Regenerate)">
+                <UIcon name="i-lucide-rotate-cw" class="size-2.5" />
+                <span class="text-[8.5px] font-medium">Ulangi</span>
+              </button>
+            </div>
+
+            <div class="flex items-center gap-1.5 text-[8.5px] text-slate-400 font-mono">
+              <span class="px-2 py-0.5 rounded-full bg-white/[0.03] border border-white/[0.05] text-slate-400">
+                {{ agentStore.selectedModel || 'Default Model' }}
+              </span>
+            </div>
           </div>
         </div>
-      </div>
-      <!-- Closing div for messages list v-else -->
       </div>
     </div>
 
-    <!-- MODERN INPUT BAR (Nuxt UI ChatPrompt Floating Pill) -->
-    <div class="p-3 pb-3.5 bg-[#090d14]/95 border-t border-white/[0.06] space-y-2 relative z-30">
-      <!-- Files With Changes Drawer (Compact) -->
-      <div
-        v-if="agentStore.sessionModifiedFiles.length > 0"
-        class="rounded-xl border border-white/[0.08] bg-[#0c111c]/95 shadow-2xl backdrop-blur-md overflow-hidden mb-2 select-none"
-      >
-        <!-- List of modified files -->
-        <div class="divide-y divide-white/[0.04] max-h-36 overflow-y-auto">
-          <div
-            v-for="file in agentStore.sessionModifiedFiles"
-            :key="file.filePath"
-            @click="workspaceStore.openFile(file.filePath, file.fileName)"
-            class="px-3 py-1.5 flex items-center justify-between hover:bg-[#131d2e] cursor-pointer transition-colors group text-[10px]"
-          >
-            <div class="flex items-center gap-1.5 min-w-0 pr-1.5">
-              <!-- Bullet indicator -->
-              <span class="w-1.5 h-1.5 rounded-full bg-[#42b883] flex-shrink-0"></span>
-
-              <!-- +X -Y diff badge -->
-              <span class="font-mono text-[9px] font-semibold flex items-center gap-0.5 flex-shrink-0">
-                <span class="text-[#42b883]">+{{ file.additions }}</span>
-                <span class="text-rose-400">-{{ file.deletions }}</span>
-              </span>
-
-              <!-- File Name -->
-              <span class="text-[11px] font-semibold text-slate-100 truncate group-hover:text-[#42b883] transition-colors">
-                {{ file.fileName }}
-              </span>
-
-              <!-- Relative Path suffix -->
-              <span class="text-[9px] text-slate-500 truncate font-mono">
-                {{ formatRelativePath(file.filePath) }}
-              </span>
-            </div>
-
-            <!-- Action buttons per file: Accept, Reject, Dismiss (Pill Style) -->
-            <div class="flex items-center gap-1.5 flex-shrink-0">
-              <button
-                @click.stop="agentStore.acceptFileChanges(file.filePath)"
-                class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[9px] font-bold bg-[#42b883] hover:bg-[#34d399] text-[#090d14] shadow-xs shadow-[#42b883]/30 transition-all cursor-pointer active:scale-95"
-                title="Accept seluruh perubahan file ini"
-              >
-                <UIcon name="i-lucide-check" class="size-2.5" />
-                <span>Accept</span>
-              </button>
-              <button
-                @click.stop="agentStore.rejectFileChanges(file.filePath)"
-                class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-medium bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 text-rose-300 hover:text-rose-200 transition-all cursor-pointer"
-                title="Reject perubahan file ini"
-              >
-                <UIcon name="i-lucide-x" class="size-2.5 text-rose-400" />
-                <span>Reject</span>
-              </button>
-              <button
-                @click.stop="agentStore.removeModifiedFile(file.filePath)"
-                class="w-4 h-4 rounded-full flex items-center justify-center text-slate-500 hover:text-slate-300 hover:bg-white/[0.06] opacity-0 group-hover:opacity-100 transition-all cursor-pointer"
-                title="Tutup berkas dari daftar"
-              >
-                <UIcon name="i-lucide-x" class="size-3" />
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Bottom Action Row: N Files With Changes, Reject all, Accept all (Pill Style) -->
-        <div class="px-3 py-2 bg-[#090d14]/90 border-t border-white/[0.06] flex items-center justify-between text-[10px]">
-          <div class="flex items-center gap-1.5 text-slate-400 font-medium">
-            <UIcon name="i-lucide-file-diff" class="size-3 text-[#42b883]" />
-            <span>{{ agentStore.sessionModifiedFiles.length }} File{{ agentStore.sessionModifiedFiles.length > 1 ? 's' : '' }} Changed</span>
-          </div>
-
-          <div class="flex items-center gap-2">
-            <!-- Reject all -->
-            <button
-              @click="agentStore.rejectAllChanges"
-              class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-medium bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 text-rose-300 hover:text-rose-200 transition-all cursor-pointer active:scale-95"
-            >
-              <UIcon name="i-lucide-x-circle" class="size-3 text-rose-400" />
-              <span>Reject all</span>
-            </button>
-
-            <!-- Accept all button -->
-            <button
-              @click="agentStore.acceptAllChanges"
-              class="inline-flex items-center gap-1 px-3 py-1 rounded-full text-[10px] font-bold bg-[#42b883] hover:bg-[#34d399] text-[#090d14] shadow-md shadow-[#42b883]/30 transition-all cursor-pointer active:scale-95"
-            >
-              <UIcon name="i-lucide-check-check" class="size-3" />
-              <span>Accept all</span>
-            </button>
-          </div>
-        </div>
+    <!-- Active File Context Strip -->
+    <div v-if="workspaceStore.activeTab?.filePath"
+      class="px-2.5 py-1 bg-black/40 border-t border-white/[0.06] flex items-center justify-between text-[9px] text-slate-400">
+      <div class="flex items-center gap-1 truncate max-w-[180px]">
+        <UIcon name="i-lucide-paperclip" class="size-2.5 text-[#42b883]" />
+        <span class="truncate text-slate-300 font-mono">{{ workspaceStore.activeTab.title }}</span>
       </div>
+      <label
+        class="flex items-center gap-1 cursor-pointer select-none text-[8.5px] text-[#42b883] font-medium hover:text-emerald-300">
+        <input type="checkbox" v-model="includeActiveFile" class="rounded accent-[#42b883] size-2.5 cursor-pointer" />
+        <span>Konteks File</span>
+      </label>
+    </div>
 
-      <!-- Slash Commands Suggestions Dropdown -->
+    <!-- Input Box -->
+    <div class="p-2.5 bg-[#090d14] border-t border-white/[0.06] flex-shrink-0 relative z-20">
       <div
-        v-if="showSlashMenu && filteredSlashActions.length > 0"
-        class="absolute bottom-16 left-2 right-2 bg-[#0c111a] border border-[#35495e]/70 rounded-xl shadow-2xl p-1.5 z-40 space-y-0.5"
-      >
-        <div class="px-2 py-1 text-[9px] text-[#42b883] font-semibold uppercase tracking-wider">
-          Aksi Cepat Slash (Tekan Tab atau Klik)
-        </div>
-        <button
-          v-for="action in filteredSlashActions"
-          :key="action.prefix"
-          @click="selectSlashAction(action)"
-          class="w-full px-2.5 py-1.5 rounded-lg hover:bg-[#42b883]/15 text-left flex items-center justify-between text-[11px] text-slate-200 hover:text-white transition-colors group"
-        >
-          <div class="flex items-center gap-2">
-            <UIcon :name="action.icon" class="size-3.5 text-[#42b883]" />
-            <span class="font-mono font-semibold text-[#42b883]">{{ action.prefix }}</span>
-            <span class="text-slate-400 group-hover:text-slate-200 text-[10px]">{{ action.label }}</span>
-          </div>
-          <span class="text-[9px] text-slate-500 font-mono">↵</span>
-        </button>
-      </div>
+        class="bg-[#0b131e]/90 border border-white/[0.08] hover:border-white/[0.14] focus-within:border-[#42b883]/50 focus-within:ring-1 focus-within:ring-[#42b883]/25 rounded-2xl p-2.5 shadow-xl transition-all duration-200 space-y-2">
+        <!-- Hidden Image Input File Picker -->
+        <input ref="imageInputRef" type="file" accept="image/*" multiple class="hidden"
+          @change="handleImageInputChange" />
 
-      <!-- Mention @ Context & Files Dropdown Popup (Antigravity Style) -->
-      <div
-        v-if="showMentionMenu && filteredMentionCandidates.length > 0"
-        class="absolute bottom-16 left-2 right-2 bg-[#0c111c]/95 border border-white/[0.1] backdrop-blur-xl rounded-2xl shadow-2xl p-2 z-40 space-y-1 select-none max-h-64 flex flex-col animate-in fade-in zoom-in-95 duration-100"
-      >
-        <!-- Header -->
-        <div class="px-2 py-1 flex items-center justify-between text-[10px] text-slate-400 font-semibold border-b border-white/[0.06] pb-1.5 mb-0.5">
-          <span class="text-[#42b883] flex items-center gap-1.5 font-bold">
-            <UIcon name="i-lucide-at-sign" class="size-3.5" />
-            Lampirkan Berkas / Konteks (@)
-          </span>
-          <span class="text-[9px] text-slate-500 font-mono">
-            Gunakan ↑ ↓ lalu Tab / ↵
-          </span>
-        </div>
-
-        <!-- Candidates List -->
-        <div class="overflow-y-auto space-y-0.5 custom-scroll pr-0.5 flex-1 max-h-48">
-          <button
-            v-for="(item, idx) in filteredMentionCandidates"
-            :key="item.path + idx"
-            @click="selectMentionItem(item)"
-            @mouseenter="selectedMentionIndex = idx"
-            class="w-full px-2.5 py-1.5 rounded-xl text-left flex items-center justify-between text-[11px] transition-all cursor-pointer group border"
-            :class="selectedMentionIndex === idx
-              ? 'bg-[#42b883]/15 text-[#42b883] border-[#42b883]/30 font-semibold'
-              : 'text-slate-300 hover:bg-white/[0.04] border-transparent'"
-          >
-            <div class="flex items-center gap-2 min-w-0 pr-2">
-              <UIcon
-                :name="item.isDirectory ? 'i-lucide-folder' : getNuxtFileIcon(item.name).icon"
-                class="size-3.5 flex-shrink-0"
-                :class="item.isDirectory ? 'text-amber-400' : getNuxtFileIcon(item.name).colorClass"
-              />
-              <span class="truncate font-medium text-xs">{{ item.name }}</span>
-              <span class="text-[9px] text-slate-500 font-mono truncate" :title="item.path">
-                {{ formatRelativePath(item.path) }}
-              </span>
-            </div>
-
-            <div class="flex items-center gap-1.5 flex-shrink-0">
-              <span
-                v-if="item.badge"
-                class="px-1.5 py-0.5 rounded-full text-[8px] font-semibold uppercase tracking-wider"
-                :class="item.badge === 'File Aktif'
-                  ? 'bg-[#42b883]/20 text-[#42b883] border border-[#42b883]/30'
-                  : 'bg-white/[0.06] text-slate-400 border border-white/[0.08]'"
-              >
-                {{ item.badge }}
-              </span>
-              <span class="text-[9px] text-slate-500 font-mono opacity-0 group-hover:opacity-100 transition-opacity">↵</span>
-            </div>
-          </button>
-        </div>
-      </div>
-
-      <!-- Unified AI Settings Popover (Ruang Kerja, Model AI, & Konteks) -->
-      <div
-        v-if="isSettingsMenuOpen"
-        class="absolute bottom-16 left-2 right-2 max-h-[520px] flex flex-col bg-[#0c121d]/98 border border-white/[0.12] rounded-2xl shadow-2xl backdrop-blur-2xl z-40 p-3 space-y-3 animate-in fade-in zoom-in-95 duration-150 select-none overflow-hidden"
-      >
-        <!-- Header -->
-        <div class="flex items-center justify-between pb-2 border-b border-white/[0.08] flex-shrink-0">
-          <div class="flex items-center gap-2">
-            <div class="w-6 h-6 rounded-lg bg-[#42b883]/15 border border-[#42b883]/30 flex items-center justify-center text-[#42b883]">
-              <UIcon name="i-lucide-settings" class="size-3.5" />
-            </div>
-            <div>
-              <div class="text-xs font-semibold text-white leading-tight">Pengaturan Agen AI</div>
-              <div class="text-[10px] text-slate-400">Pilih ruang kerja & model kecerdasan buatan</div>
-            </div>
-          </div>
-          <button
-            @click="isSettingsMenuOpen = false"
-            class="w-6 h-6 rounded-lg flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/[0.08] transition-colors cursor-pointer"
-            title="Tutup pengaturan"
-          >
-            <UIcon name="i-lucide-x" class="size-3.5" />
-          </button>
-        </div>
-
-        <!-- Scrollable Settings Body -->
-        <div class="overflow-y-auto space-y-3.5 pr-1 custom-scroll flex-1">
-          <!-- Section 1: Ruang Kerja (Workspace) -->
-          <div class="space-y-1.5">
-            <div class="flex items-center justify-between text-[11px] font-medium text-slate-300">
-              <span class="flex items-center gap-1.5 text-[#42b883]">
-                <UIcon name="i-lucide-folder-git-2" class="size-3.5" />
-                Ruang Kerja (Project Path)
-              </span>
-              <div class="flex items-center gap-2">
-                <button
-                  v-if="connectedProject"
-                  @click.stop="disconnectTargetWorkspace"
-                  class="text-[9px] px-1.5 py-0.5 rounded text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 transition-colors cursor-pointer"
-                  title="Lepaskan penetapan folder target project saat ini"
-                >
-                  Lepas Target
-                </button>
-                <span class="text-[10px] text-slate-400 font-mono">
-                  {{ workspaceStore.workspaceRoots.length }} folder
-                </span>
-              </div>
-            </div>
-
-            <!-- Workspace List -->
-            <div class="space-y-1 max-h-28 overflow-y-auto custom-scroll pr-0.5">
-              <button
-                v-for="root in workspaceStore.workspaceRoots"
-                :key="root.id"
-                @click="selectTargetWorkspace(root)"
-                class="w-full p-1.5 rounded-xl text-left text-[11px] transition-all flex items-center justify-between group cursor-pointer border"
-                :class="connectedProject?.path === root.path
-                  ? 'bg-[#42b883]/15 text-[#42b883] font-semibold border-[#42b883]/40'
-                  : 'text-slate-300 hover:bg-white/[0.04] border-white/[0.06] hover:border-white/[0.1]'"
-              >
-                <div class="flex items-center gap-1.5 min-w-0 pr-1">
-                  <UIcon
-                    name="i-lucide-folder"
-                    class="size-3.5 flex-shrink-0"
-                    :class="connectedProject?.path === root.path ? 'text-[#42b883]' : 'text-slate-400 group-hover:text-white'"
-                  />
-                  <div class="min-w-0 flex flex-col">
-                    <span class="truncate font-medium text-xs">{{ root.name }}</span>
-                    <span class="text-[9px] text-slate-500 font-mono truncate" :title="root.path">{{ root.path }}</span>
-                  </div>
-                </div>
-                <UIcon
-                  v-if="connectedProject?.path === root.path"
-                  name="i-lucide-check-circle-2"
-                  class="size-3.5 text-[#42b883] flex-shrink-0"
-                />
-              </button>
-
-              <div v-if="workspaceStore.workspaceRoots.length === 0" class="py-2 text-center text-slate-500 text-[10px]">
-                Belum ada folder project yang dibuka di editor.
-              </div>
-            </div>
-
-            <button
-              @click="handleAddFolderForAgent"
-              class="w-full py-1.5 px-2 rounded-xl bg-white/[0.03] hover:bg-[#42b883]/10 border border-white/[0.06] hover:border-[#42b883]/30 text-slate-300 hover:text-[#42b883] text-[10px] font-medium flex items-center justify-center gap-1.5 transition-all cursor-pointer"
-            >
-              <UIcon name="i-lucide-folder-plus" class="size-3 text-[#42b883]" />
-              <span>Tambah Folder Project Lain...</span>
-            </button>
-          </div>
-
-          <!-- Section 2: Model AI -->
-          <div class="space-y-1.5 pt-2 border-t border-white/[0.06]">
-            <div class="flex items-center justify-between text-[11px] font-medium text-slate-300">
-              <span class="flex items-center gap-1.5 text-[#42b883]">
-                <UIcon name="i-lucide-cpu" class="size-3.5" />
-                Model AI (9router)
-              </span>
-              <div class="flex items-center gap-1.5">
-                <button
-                  @click="agentStore.loadModels"
-                  :disabled="agentStore.isModelsLoading"
-                  class="w-4 h-4 rounded flex items-center justify-center text-slate-400 hover:text-white transition-colors cursor-pointer disabled:opacity-50"
-                  title="Refresh model dari 9router"
-                >
-                  <UIcon name="i-lucide-refresh-cw" class="size-2.5" :class="{ 'animate-spin': agentStore.isModelsLoading }" />
-                </button>
-                <span v-if="agentStore.selectedModel || settingsStore.ai.defaultModel" class="text-[9px] px-1.5 py-0.5 rounded bg-[#42b883]/15 text-[#42b883] font-mono font-medium truncate max-w-[120px]" :title="agentStore.selectedModel || settingsStore.ai.defaultModel">
-                  {{ agentStore.selectedModel || settingsStore.ai.defaultModel }}
-                </span>
-                <span v-else class="text-[9px] px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-300 font-mono font-medium">
-                  Kosong
-                </span>
-              </div>
-            </div>
-
-            <!-- Search Input -->
-            <div class="relative">
-              <UIcon name="i-lucide-search" class="size-3 text-slate-400 absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none" />
-              <input
-                v-model="modelSearchQuery"
-                type="text"
-                placeholder="Cari model AI..."
-                class="w-full bg-[#080d16] border border-white/[0.08] focus:border-[#42b883]/50 focus:ring-1 focus:ring-[#42b883]/20 rounded-lg pl-6 pr-6 py-1 text-[10px] text-slate-200 placeholder:text-slate-500 outline-none transition-all"
-              />
-              <button
-                v-if="modelSearchQuery"
-                @click="modelSearchQuery = ''"
-                class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white cursor-pointer"
-              >
-                <UIcon name="i-lucide-x" class="size-2.5" />
-              </button>
-            </div>
-
-            <!-- Models List -->
-            <div class="max-h-28 overflow-y-auto space-y-0.5 custom-scroll pr-0.5">
-              <button
-                v-for="m in filteredModels"
-                :key="m"
-                @click="selectModel(m)"
-                class="w-full px-2 py-1.5 rounded-lg text-left text-[11px] transition-all flex items-center justify-between group cursor-pointer"
-                :class="(agentStore.selectedModel || settingsStore.ai.defaultModel) === m
-                  ? 'bg-[#42b883]/15 text-[#42b883] font-semibold border border-[#42b883]/30'
-                  : 'text-slate-300 hover:bg-white/[0.04] border border-transparent'"
-              >
-                <span class="truncate pr-1">{{ m }}</span>
-                <UIcon v-if="(agentStore.selectedModel || settingsStore.ai.defaultModel) === m" name="i-lucide-check-circle-2" class="size-3 text-[#42b883] flex-shrink-0" />
-              </button>
-
-              <div v-if="filteredModels.length === 0" class="py-2.5 text-center text-slate-500 text-[10px] space-y-1">
-                <p>{{ agentStore.availableModels.length === 0 ? 'Belum ada model dari 9router' : 'Model tidak cocok dengan pencarian' }}</p>
-                <button
-                  v-if="agentStore.availableModels.length === 0"
-                  @click="agentStore.loadModels"
-                  class="text-[9px] text-[#42b883] hover:underline cursor-pointer"
-                >
-                  Coba hubungkan & cari model lagi
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <!-- Section 3: Permissions (Auto Execution & Review Policy - Sesuai Gambar 2 Antigravity) -->
-          <div class="space-y-2 pt-2 border-t border-white/[0.06]">
-            <div class="flex items-center justify-between text-[11px] font-medium text-slate-300">
-              <span class="flex items-center gap-1.5 text-[#42b883]">
-                <UIcon name="i-lucide-shield-check" class="size-3.5" />
-                Permissions
-              </span>
-            </div>
-
-            <div class="space-y-2 text-[11px]">
-              <!-- Auto Execution Row (Persis seperti Gambar 2 Antigravity) -->
-              <div class="flex items-center justify-between gap-3">
-                <div class="flex items-center gap-1.5 text-slate-300 select-none">
-                  <span class="font-normal text-[11px] text-slate-200">Auto Execution</span>
-                  <span
-                    class="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full text-[10px] text-slate-400 hover:text-slate-200 hover:bg-white/10 cursor-help transition-colors"
-                    title="Controls whether commands and tools can run automatically or require user approval before execution."
-                  >
-                    ⓘ
-                  </span>
-                </div>
-
-                <div class="relative min-w-[140px]">
-                  <select
-                    v-model="settingsStore.ai.autoExecution"
-                    class="w-full bg-[#131d2e] hover:bg-[#182438] border border-white/[0.1] hover:border-white/[0.2] text-slate-200 text-[11px] rounded-lg px-2.5 py-1 pr-6 appearance-none focus:outline-none focus:border-[#42b883]/60 cursor-pointer transition-colors"
-                  >
-                    <option value="always_proceed">Always Proceed</option>
-                    <option value="ask_before">Ask Before Execution</option>
-                    <option value="never">Never Execute</option>
-                  </select>
-                  <UIcon name="i-lucide-chevron-down" class="size-3 text-slate-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
-                </div>
-              </div>
-
-              <!-- Review Policy Row (Persis seperti Gambar 2 Antigravity) -->
-              <div class="flex items-center justify-between gap-3">
-                <div class="flex items-center gap-1.5 text-slate-300 select-none">
-                  <span class="font-normal text-[11px] text-slate-200">Review Policy</span>
-                  <span
-                    class="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full text-[10px] text-slate-400 hover:text-slate-200 hover:bg-white/10 cursor-help transition-colors"
-                    title="Controls how code modifications and file edits are reviewed and applied."
-                  >
-                    ⓘ
-                  </span>
-                </div>
-
-                <div class="relative min-w-[140px]">
-                  <select
-                    v-model="settingsStore.ai.reviewPolicy"
-                    class="w-full bg-[#131d2e] hover:bg-[#182438] border border-white/[0.1] hover:border-white/[0.2] text-slate-200 text-[11px] rounded-lg px-2.5 py-1 pr-6 appearance-none focus:outline-none focus:border-[#42b883]/60 cursor-pointer transition-colors"
-                  >
-                    <option value="request_review">Request Review</option>
-                    <option value="auto_apply">Auto Apply</option>
-                    <option value="always_ask">Always Ask</option>
-                  </select>
-                  <UIcon name="i-lucide-chevron-down" class="size-3 text-slate-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Section 4: Active Context Toggle -->
-          <div class="pt-2 border-t border-white/[0.06]">
-            <label class="flex items-center gap-2 cursor-pointer group select-none">
-              <input
-                type="checkbox"
-                v-model="agentStore.includeActiveFileContext"
-                class="rounded border-white/20 bg-slate-800 text-[#42b883] focus:ring-0 focus:ring-offset-0 cursor-pointer"
-              />
-              <div class="flex flex-col">
-                <span class="text-[11px] text-slate-200 group-hover:text-white font-medium">Sertakan File Aktif Editor</span>
-                <span class="text-[9px] text-slate-400">Kirim isi berkas yang sedang dibuka sebagai konteks otomatis</span>
-              </div>
-            </label>
-          </div>
-        </div>
-      </div>
-
-      <!-- Barrier Card: Tampil ketika target project belum ditetapkan (Tombol Dihapus Sesuai Permintaan) -->
-      <div
-        v-if="!connectedProject"
-        class="mb-2 p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/25 backdrop-blur-md shadow-lg flex items-start gap-2.5 transition-all duration-300 select-none"
-      >
-        <div class="w-7 h-7 rounded-lg bg-amber-500/20 border border-amber-500/30 flex items-center justify-center flex-shrink-0 text-amber-400 mt-0.5">
-          <UIcon name="i-lucide-folder-lock" class="size-4" />
-        </div>
-        <div class="flex-1 min-w-0">
-          <div class="flex items-center justify-between">
-            <h4 class="text-[11px] font-semibold text-amber-300 flex items-center gap-1.5">
-              Target Project Belum Ditetapkan
-            </h4>
-            <span class="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono font-medium">Barier Aktif</span>
-          </div>
-          <p class="text-[10px] text-amber-200/80 leading-snug mt-0.5">
-            Chat dengan Agen dikunci sampai Anda menetapkan folder target project kerja AI.
-          </p>
-        </div>
-      </div>
-
-      <!-- 3. Main Floating Input Pill (Nuxt UI ChatPrompt) -->
-      <div
-        class="bg-[#0c121d]/90 border border-white/[0.08] hover:border-white/[0.14] focus-within:border-[#42b883]/50 focus-within:ring-1 focus-within:ring-[#42b883]/25 rounded-2xl p-2.5 shadow-xl transition-all duration-200 space-y-1.5"
-        @paste="handlePaste"
-      >
-        <!-- Attached Images Strip at the TOP (No changes, stays at the top) -->
-        <div v-if="attachedImages.length > 0" class="flex flex-wrap gap-1.5 pb-0.5 pt-0.5">
+        <!-- Attached Images Preview Strip (Only if images are attached) -->
+        <div v-if="attachedImages.length > 0" class="flex flex-wrap items-center gap-1.5 pb-1.5 border-b border-white/[0.06] max-h-24 overflow-y-auto custom-scrollbar">
           <div
             v-for="(img, idx) in attachedImages"
             :key="idx"
-            class="relative group rounded-lg overflow-hidden border border-white/[0.1] bg-[#131c2a] w-11 h-11 flex-shrink-0 cursor-pointer shadow-md"
-            @click="openImageLightbox(img)"
+            class="inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded-md bg-[#0a1815] hover:bg-[#0d221e] border border-[#42b883]/35 hover:border-[#42b883]/60 text-emerald-300 text-[10px] font-mono shadow-xs transition-colors select-none max-w-[180px]"
           >
-            <img :src="img" alt="Pasted attachment" class="w-full h-full object-cover" />
+            <img :src="img.previewUrl" :alt="img.name" class="w-4 h-4 rounded object-cover flex-shrink-0 bg-black/40 border border-white/10" />
+            <span class="truncate flex-1 min-w-0 text-[10px]" :title="img.relativePath">
+              {{ img.name }}
+            </span>
             <button
               @click.stop="removeAttachedImage(idx)"
-              class="absolute top-0.5 right-0.5 w-3.5 h-3.5 bg-black/80 hover:bg-rose-600 text-white rounded-full flex items-center justify-center text-[7px] transition-colors"
+              class="w-3.5 h-3.5 rounded hover:bg-rose-500/20 hover:text-rose-400 text-emerald-400/60 flex items-center justify-center transition-colors flex-shrink-0 cursor-pointer ml-0.5"
               title="Hapus gambar"
             >
               <UIcon name="i-lucide-x" class="size-2.5" />
@@ -2731,288 +1195,144 @@ async function openFileWithDiff(file: {
           </div>
         </div>
 
-        <!-- Chat Input Textarea (Antigravity Style: Free-form typing with inline @file mentions anywhere) -->
-        <div class="relative min-h-[24px]">
-          <textarea
-            ref="textareaRef"
-            v-model="inputPrompt"
-            rows="1"
-            :placeholder="!connectedProject ? '🔒 Tetapkan folder target project terlebih dahulu...' : 'Ask anything, tag code (Ctrl+L), paste (Ctrl+V), @, /'"
-            class="w-full bg-transparent border-none text-[11px] text-slate-100 placeholder:text-slate-500 focus:outline-none resize-none p-0 leading-relaxed font-sans min-h-[22px] max-h-[160px]"
-            :class="{ 'opacity-40 cursor-not-allowed select-none': !connectedProject }"
-            @input="adjustTextareaHeight"
-            @keydown="handleKeydown"
-            @keyup="checkMentionAtCursor"
-            @click="checkMentionAtCursor"
-            :disabled="!connectedProject || agentStore.isGenerating"
-          ></textarea>
+        <!-- Textarea -->
+        <div class="relative w-full">
+          <textarea ref="inputAreaRef" v-model="inputText" @input="adjustTextareaHeight" @keydown="handleKeyDown" @paste="handlePaste"
+            placeholder="Ask Makarya Agent anything, tag code (Ctrl+L), paste (Ctrl+V), @, /" rows="1"
+            class="w-full bg-transparent border-none text-[11px] text-slate-100 placeholder:text-slate-500 focus:outline-none resize-none p-0 leading-relaxed font-sans min-h-[22px] max-h-[160px] custom-scrollbar overflow-y-hidden"></textarea>
         </div>
 
         <!-- Bottom Controls Row inside the Pill -->
         <div class="flex items-center justify-between pt-0.5">
-          <!-- Left: Gear Settings, @ Mention, & Attach Image -->
+          <!-- Left: Settings, @ Mention Context, Upload Image -->
           <div class="flex items-center gap-1.5">
-            <!-- Gear Settings Button (Model & Workspace Selector) -->
-            <button
-              @click="isSettingsMenuOpen = !isSettingsMenuOpen"
+            <!-- Settings / Model Button -->
+            <button @click="isModelModalOpen = !isModelModalOpen; isSessionModalOpen = false"
               class="w-6 h-6 rounded-full flex items-center justify-center transition-all cursor-pointer border text-[11px] flex-shrink-0"
-              :class="[
-                isSettingsMenuOpen
-                  ? 'bg-[#42b883]/20 border-[#42b883]/50 text-[#42b883] shadow-xs'
-                  : !connectedProject
-                    ? 'bg-amber-500/20 border-amber-500/50 text-amber-400 animate-pulse'
-                    : 'bg-white/[0.04] border-white/[0.08] text-slate-400 hover:text-white hover:bg-white/[0.08]'
-              ]"
-              :title="!connectedProject ? 'Tetapkan Folder Target Project di Sini' : 'Pengaturan Model & Ruang Kerja AI'"
-            >
+              :class="isModelModalOpen
+                ? 'bg-[#42b883]/20 border-[#42b883]/50 text-[#42b883] shadow-xs'
+                : 'bg-white/[0.04] border-white/[0.08] text-slate-400 hover:text-white hover:bg-white/[0.08]'"
+              :title="`Pengaturan Model AI (Aktif: ${agentStore.selectedModel || 'Default'})`">
               <UIcon name="i-lucide-settings" class="size-3 font-semibold" />
             </button>
 
-            <!-- @ Mention Context Button -->
-            <button
-              @click="connectedProject ? triggerMentionInput() : (isSettingsMenuOpen = true)"
-              :disabled="!connectedProject"
-              class="w-6 h-6 rounded-full flex items-center justify-center transition-all border text-[11px] flex-shrink-0 disabled:opacity-30 disabled:cursor-not-allowed"
-              :class="showMentionMenu
-                ? 'bg-[#42b883]/20 border-[#42b883]/50 text-[#42b883] shadow-xs'
-                : 'bg-white/[0.04] border-white/[0.08] text-slate-400 hover:text-white hover:bg-white/[0.08] cursor-pointer'"
-              title="Lampirkan Berkas atau Konteks (@)"
-            >
+            <!-- @ Mention / File Context Toggle Button -->
+            <button @click="includeActiveFile = !includeActiveFile"
+              class="w-6 h-6 rounded-full flex items-center justify-center transition-all border text-[11px] flex-shrink-0 cursor-pointer"
+              :class="includeActiveFile && workspaceStore.activeTab?.filePath
+                ? 'bg-[#42b883]/20 border-[#42b883]/50 text-[#42b883] shadow-xs ring-1 ring-[#42b883]/30'
+                : 'bg-white/[0.04] border-white/[0.08] text-slate-400 hover:text-white hover:bg-white/[0.08]'"
+              :title="includeActiveFile && workspaceStore.activeTab?.filePath ? `Konteks Aktif: ${workspaceStore.activeTab.title}` : 'Sertakan Konteks Berkas (@)'">
               <UIcon name="i-lucide-at-sign" class="size-3 font-semibold" />
             </button>
 
-            <!-- Attach Image Button -->
-            <button
-              @click="connectedProject ? triggerFileInput() : (isSettingsMenuOpen = true)"
-              :disabled="!connectedProject"
-              class="w-6 h-6 rounded-full flex items-center justify-center transition-all border text-slate-400 flex-shrink-0 disabled:opacity-30 disabled:cursor-not-allowed"
-              :class="connectedProject
-                ? 'bg-white/[0.04] hover:bg-white/[0.08] border-white/[0.08] hover:border-[#42b883]/40 hover:text-[#42b883] cursor-pointer'
-                : 'bg-white/[0.02] border-white/[0.05]'"
-              title="Lampirkan Gambar (Atau Paste Ctrl+V dari Clipboard)"
-            >
-              <UIcon name="i-lucide-image" class="size-3" />
+            <!-- Upload Image to .makarya Folder Button -->
+            <button @click="triggerImageUpload" :disabled="!connectedProject || isUploadingImage"
+              class="w-6 h-6 rounded-full flex items-center justify-center transition-all border text-[11px] flex-shrink-0"
+              :class="[
+                !connectedProject
+                  ? 'opacity-40 cursor-not-allowed bg-white/[0.02] border-white/[0.05] text-slate-500'
+                  : attachedImages.length > 0
+                    ? 'bg-[#42b883]/20 border-[#42b883]/50 text-[#42b883] shadow-xs cursor-pointer'
+                    : 'bg-white/[0.04] hover:bg-white/[0.08] border-white/[0.08] hover:border-[#42b883]/40 text-slate-400 hover:text-[#42b883] cursor-pointer'
+              ]"
+              :title="!connectedProject ? 'Buka folder project terlebih dahulu untuk upload gambar' : 'Unggah Gambar ke Folder .makarya'">
+              <UIcon :name="isUploadingImage ? 'i-lucide-loader-2' : 'i-lucide-image'" class="size-3"
+                :class="{ 'animate-spin': isUploadingImage }" />
             </button>
-            <!-- Plan Mode Button (/plan) -->
-            <button
-              @click="connectedProject ? triggerPlanMode() : (isSettingsMenuOpen = true)"
-              :disabled="!connectedProject"
-              class="w-6 h-6 rounded-full flex items-center justify-center transition-all border text-slate-400 flex-shrink-0 disabled:opacity-30 disabled:cursor-not-allowed"
-              :class="connectedProject
-                ? 'bg-white/[0.04] hover:bg-emerald-500/15 border-white/[0.08] hover:border-emerald-500/40 hover:text-emerald-400 cursor-pointer'
-                : 'bg-white/[0.02] border-white/[0.05]'"
-              title="Buat Rencana Implementasi (/plan)"
-            >
-              <UIcon name="i-lucide-clipboard-list" class="size-3" />
-            </button>
-            <input
-              ref="fileInputRef"
-              type="file"
-              accept="image/*"
-              multiple
-              class="hidden"
-              @change="handleFileInputChange"
-            />
           </div>
 
-          <!-- Right: Mic & Circular Action Button (Always Preserved, never cut off) -->
+          <!-- Right: Mic & Circular Send/Stop Button -->
           <div class="flex items-center gap-1.5 flex-shrink-0">
             <!-- Voice Input Icon -->
             <button
-              @click="connectedProject ? triggerVoiceNotice() : (isSettingsMenuOpen = true)"
-              :disabled="!connectedProject"
-              class="w-6 h-6 rounded-full flex items-center justify-center transition-all border text-slate-400 flex-shrink-0 disabled:opacity-30 disabled:cursor-not-allowed"
-              :class="connectedProject
-                ? 'bg-white/[0.04] hover:bg-white/[0.08] border-white/[0.08] hover:border-[#42b883]/40 hover:text-[#42b883] cursor-pointer'
-                : 'bg-white/[0.02] border-white/[0.05]'"
-              title="Input Suara"
-            >
+              class="w-6 h-6 rounded-full flex items-center justify-center transition-all border text-slate-400 bg-white/[0.04] hover:bg-white/[0.08] border-white/[0.08] hover:border-[#42b883]/40 hover:text-[#42b883] cursor-pointer flex-shrink-0"
+              title="Input Suara">
               <UIcon name="i-lucide-mic" class="size-3" />
             </button>
 
-            <!-- Circular Send / Abort Button (Compact) -->
-            <button
-              v-if="agentStore.isGenerating"
-              @click="agentStore.abortGeneration"
+            <!-- Circular Send / Abort Button -->
+            <button v-if="agentStore.isGenerating" @click="agentStore.abortGeneration"
               class="w-6 h-6 min-w-[24px] rounded-full flex items-center justify-center bg-rose-500 hover:bg-rose-600 text-white shadow-md active:scale-95 transition-all cursor-pointer"
-              title="Hentikan Jawaban"
-            >
+              title="Hentikan Jawaban Agen (Stop)">
               <UIcon name="i-lucide-square" class="size-3" />
             </button>
-            <button
-              v-else
-              @click="() => handleSendMessage()"
-              :disabled="!connectedProject || (!inputPrompt.trim() && attachedImages.length === 0 && attachedFiles.length === 0)"
+            <button v-else @click="handleSendMessage" :disabled="!inputText.trim() && attachedImages.length === 0 && taggedContexts.length === 0"
               class="w-6 h-6 min-w-[24px] rounded-full flex items-center justify-center transition-all duration-200 active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed"
-              :class="connectedProject && (inputPrompt.trim() || attachedImages.length > 0 || attachedFiles.length > 0)
-                ? 'bg-[#42b883] text-[#090d14] hover:bg-[#34d399] shadow-md shadow-[#42b883]/30 cursor-pointer font-bold'
+              :class="(inputText.trim() || attachedImages.length > 0 || taggedContexts.length > 0)
+                ? 'bg-gradient-to-r from-[#059669] to-[#42b883] text-white hover:from-[#10b981] hover:to-[#34d399] shadow-md shadow-emerald-600/30 cursor-pointer font-bold'
                 : 'bg-white/[0.05] text-slate-400 border border-white/[0.08] hover:bg-white/[0.08]'"
-              :title="!connectedProject ? 'Tetapkan folder target project terlebih dahulu' : 'Kirim (Enter)'"
-            >
-              <UIcon :name="!connectedProject ? 'i-lucide-lock' : 'i-lucide-arrow-right'" class="size-3.5" />
+              title="Kirim (Enter)">
+              <UIcon name="i-lucide-arrow-right" class="size-3.5" />
             </button>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- Image Preview Lightbox Modal -->
-    <div
-      v-if="previewImageUrl"
-      class="fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-4 backdrop-blur-sm cursor-zoom-out select-none"
-      @click="closeImageLightbox"
-    >
-      <div class="relative max-w-4xl max-h-[90vh] flex flex-col items-center" @click.stop>
-        <img
-          :src="previewImageUrl"
-          alt="Full Preview"
-          class="max-w-full max-h-[85vh] rounded-lg shadow-2xl object-contain border border-[#35495e]/60 bg-[#090d14]"
-        />
-        <button
-          @click="closeImageLightbox"
-          class="absolute top-2 right-2 w-8 h-8 rounded-full bg-[#0c111a]/90 text-slate-300 hover:text-white hover:bg-[#131c2a] flex items-center justify-center transition-colors border border-[#35495e]/60 text-sm shadow-lg cursor-pointer"
-          title="Tutup Preview"
-        >
-          <UIcon name="i-lucide-x" class="size-4" />
-        </button>
-      </div>
-    </div>
-  </div>
+    <!-- Model Switcher Modal (Only Combo Models) -->
+    <AgentModelModal :is-open="isModelModalOpen" @close="isModelModalOpen = false" />
+
+    <!-- Sessions Switcher & Manager Modal -->
+    <AgentSessionModal :is-open="isSessionModalOpen" @close="isSessionModalOpen = false" />
+  </aside>
 </template>
 
 <style scoped>
-@keyframes vue-shimmer-anim {
+.custom-scrollbar::-webkit-scrollbar {
+  width: 3.5px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(66, 184, 131, 0.25);
+  border-radius: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(66, 184, 131, 0.45);
+}
+
+@keyframes agent-shimmer-anim {
   0% {
     background-position: 0% 50%;
   }
+
   50% {
     background-position: 100% 50%;
   }
+
   100% {
     background-position: 0% 50%;
   }
 }
 
-@keyframes vue-glow-pulse-anim {
-  0%, 100% {
-    box-shadow: 0 0 8px rgba(66, 184, 131, 0.9), 0 0 16px rgba(66, 184, 131, 0.4);
-    background-color: #42b883;
+@keyframes agent-glow-pulse-anim {
+
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(66, 184, 131, 0.4);
+    background-color: #059669;
   }
+
   50% {
     box-shadow: 0 0 8px rgba(52, 211, 153, 0.9), 0 0 16px rgba(52, 211, 153, 0.4);
-    background-color: #34d399;
+    background-color: #42b883;
   }
 }
 
-.vue-gradient-text {
-  background: linear-gradient(90deg, #42b883, #34d399, #60a5fa, #34d399, #42b883);
+.agent-gradient-text {
+  background: linear-gradient(90deg, #059669, #10b981, #34d399, #10b981, #059669);
   background-size: 250% auto;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
-  animation: vue-shimmer-anim 4s ease infinite;
+  animation: agent-shimmer-anim 4s ease infinite;
 }
 
-.vue-pulse-dot {
-  animation: vue-glow-pulse-anim 2.5s ease-in-out infinite;
-}
-
-:deep(.p-textarea) {
-  border: none !important;
-  box-shadow: none !important;
-  outline: none !important;
-  background: transparent !important;
-  padding: 0 !important;
-}
-
-:deep(.p-textarea:focus),
-:deep(.p-textarea:enabled:focus) {
-  border: none !important;
-  box-shadow: none !important;
-  outline: none !important;
-}
-
-/* Antigravity-Style Rich Prompt Input */
-.prompt-rich-input {
-  width: 100%;
-  min-height: 22px;
-  max-height: 160px;
-  overflow-y: auto;
-  outline: none;
-  border: none;
-  background: transparent;
-  color: #f1f5f9;
-  font-size: 11px;
-  line-height: 1.6;
-  font-family: inherit;
-  word-break: break-word;
-  white-space: pre-wrap;
-  user-select: text;
-}
-
-.prompt-rich-input:empty:before,
-.prompt-rich-input[data-empty="true"]:before {
-  content: attr(data-placeholder);
-  color: #64748b;
-  pointer-events: none;
-}
-
-/* Antigravity-Style Inline File Chip */
-:deep(.inline-file-chip) {
-  display: inline-flex;
-  align-items: center;
-  gap: 3.5px;
-  background: rgba(19, 29, 46, 0.95);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 5px;
-  padding: 1px 5px 1px 4.5px;
-  margin: 0 2px;
-  font-size: 11px;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  vertical-align: middle;
-  user-select: none;
-  line-height: 1.3;
-}
-
-:deep(.inline-file-chip:hover) {
-  border-color: rgba(66, 184, 131, 0.5);
-  background: rgba(24, 36, 56, 0.95);
-}
-
-:deep(.inline-file-chip .chip-type-badge) {
-  font-size: 9.5px;
-  font-weight: 700;
-  font-family: monospace;
-}
-
-:deep(.inline-file-chip .chip-filename) {
-  color: #e2e8f0;
-  font-weight: 500;
-}
-
-:deep(.inline-file-chip .chip-line-range) {
-  font-size: 9px;
-  font-family: monospace;
-  background: rgba(66, 184, 131, 0.15);
-  border: 1px solid rgba(66, 184, 131, 0.3);
-  color: #42b883;
-  padding: 0 3px;
-  border-radius: 3px;
-}
-
-:deep(.inline-file-chip .chip-close-btn) {
-  color: #94a3b8;
-  font-size: 12px;
-  font-weight: bold;
-  cursor: pointer;
-  padding: 0 1px;
-  line-height: 1;
-  margin-left: 1px;
-  border-radius: 3px;
-  transition: color 120ms ease;
-}
-
-:deep(.inline-file-chip .chip-close-btn:hover) {
-  color: #fb7185;
+.agent-pulse-dot {
+  animation: agent-glow-pulse-anim 2.5s ease-in-out infinite;
 }
 </style>
-

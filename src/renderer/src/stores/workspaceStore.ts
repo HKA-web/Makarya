@@ -86,11 +86,15 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         for (const p of paths) {
           try {
             const entries = await window.makaryaAPI.readDirectory(p)
-            await addWorkspaceRoot(p, entries, false)
+            if (entries !== undefined && entries !== null) {
+              await addWorkspaceRoot(p, entries, false)
+            }
           } catch {
-            // Folder may no longer exist or be accessible
+            // Folder may no longer exist or be accessible, skip and prune
           }
         }
+        // Save cleaned list to storage
+        saveWorkspaceRootsToStorage()
       }
       if (workspaceRoots.value.length > 0) {
         const agentStore = useAgentStore()
@@ -120,8 +124,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       try {
         entries = await window.makaryaAPI.readDirectory(folderPath)
       } catch (err) {
-        console.error('Failed to read directory:', err)
-        entries = []
+        console.warn('Gagal membaca direktori workspace (folder tidak ditemukan):', folderPath, err)
+        return false
       }
     }
 
@@ -594,27 +598,37 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 
   function getEffectiveProjectRoot(): string | undefined {
     // 1. If active tab belongs to one of the workspace roots, use that root
-    const activeFile = activeTab.value
+    const activeFile = activeTab.value && activeTab.value.tabType === 'editor' && activeTab.value.filePath
+      ? activeTab.value
+      : tabList.value.find((t) => t.tabType === 'editor' && t.filePath)
+
     if (activeFile && activeFile.filePath) {
       const normalizedTabPath = normalizePath(activeFile.filePath)
       for (const root of workspaceRoots.value) {
-        if (normalizedTabPath.startsWith(normalizePath(root.path))) {
+        if (root.path && normalizedTabPath.startsWith(normalizePath(root.path))) {
           return root.path
         }
       }
       // Fallback: intelligently derive project root from active tab file path if available
       const normalized = activeFile.filePath.replace(/\\/g, '/')
-      const appIndex = normalized.indexOf('/application/')
+      const lower = normalized.toLowerCase()
+      const appIndex = lower.indexOf('/application/')
       if (appIndex > 0) {
-        return normalized.slice(0, appIndex)
+        return activeFile.filePath.includes('\\')
+          ? normalized.slice(0, appIndex).replace(/\//g, '\\')
+          : normalized.slice(0, appIndex)
       }
-      const srcIndex = normalized.indexOf('/src/')
+      const srcIndex = lower.indexOf('/src/')
       if (srcIndex > 0) {
-        return normalized.slice(0, srcIndex)
+        return activeFile.filePath.includes('\\')
+          ? normalized.slice(0, srcIndex).replace(/\//g, '\\')
+          : normalized.slice(0, srcIndex)
       }
       const lastSlash = normalized.lastIndexOf('/')
       if (lastSlash > 0) {
-        return normalized.slice(0, lastSlash)
+        return activeFile.filePath.includes('\\')
+          ? normalized.slice(0, lastSlash).replace(/\//g, '\\')
+          : normalized.slice(0, lastSlash)
       }
     }
 

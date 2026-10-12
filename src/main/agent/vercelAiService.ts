@@ -1,5 +1,8 @@
 import type { BrowserWindow } from 'electron'
 import type { ModelMessage } from 'ai'
+import { existsSync, readFileSync } from 'fs'
+import { join } from 'path'
+import { homedir } from 'os'
 import { z } from 'zod'
 import { AgentToolExecutor, type ToolExecutionResult } from './agentTools'
 export type MultimodalContentPart =
@@ -73,6 +76,75 @@ async function getAiSdk() {
     }
   }
   return aiSdkModules
+}
+
+function parseJsonc(content: string): any {
+  try {
+    return JSON.parse(content)
+  } catch {
+    try {
+      const cleaned = content
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .split(/\r?\n/)
+        .map((line) => {
+          const trimmed = line.trim()
+          if (trimmed.startsWith('//') || trimmed.startsWith('#')) return ''
+          return line
+        })
+        .join('\n')
+        .replace(/,\s*([\]}])/g, '$1')
+      return JSON.parse(cleaned)
+    } catch {
+      return null
+    }
+  }
+}
+
+export function resolveLocalAiConfig(): { baseUrl: string; apiKey: string } {
+  // 1. Check environment variables
+  if (process.env.AI_BASE_URL && process.env.AI_API_KEY) {
+    return {
+      baseUrl: process.env.AI_BASE_URL,
+      apiKey: process.env.AI_API_KEY
+    }
+  }
+
+  // 2. Check ~/.config/opencode/opencode.jsonc
+  const opencodePaths = [
+    join(homedir(), '.config', 'opencode', 'opencode.jsonc'),
+    join(homedir(), '.config', 'opencode', 'opencode.json'),
+    join(homedir(), '.opencode', 'opencode.jsonc'),
+    join(homedir(), '.opencode', 'opencode.json'),
+    join(process.env.APPDATA || '', 'opencode', 'opencode.jsonc')
+  ]
+
+  for (const p of opencodePaths) {
+    if (existsSync(p)) {
+      try {
+        const raw = readFileSync(p, 'utf-8')
+        const parsed = parseJsonc(raw)
+        if (parsed?.provider && typeof parsed.provider === 'object') {
+          for (const [key, val] of Object.entries<any>(parsed.provider)) {
+            const baseURL = val?.options?.baseURL || val?.baseURL || val?.url
+            const apiKey = val?.options?.apiKey || val?.apiKey || val?.key
+            if (baseURL) {
+              return {
+                baseUrl: baseURL,
+                apiKey: apiKey || process.env.AI_API_KEY || ''
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[VercelAiService] Gagal membaca opencode config:', e)
+      }
+    }
+  }
+
+  return {
+    baseUrl: process.env.AI_BASE_URL || 'http://127.0.0.1:20128/v1',
+    apiKey: process.env.AI_API_KEY || ''
+  }
 }
 
 const defaultConfiguration: AiServiceConfiguration = {
@@ -352,12 +424,14 @@ export class VercelAiAgentService {
 
   public async fetchAvailableModels(): Promise<string[]> {
     try {
-      const baseUrl = this.configuration.baseUrl || 'http://127.0.0.1:20128/v1'
+      const localCfg = resolveLocalAiConfig()
+      const baseUrl = this.configuration.baseUrl || localCfg.baseUrl || 'http://127.0.0.1:20128/v1'
+      const apiKey = this.configuration.apiKey || localCfg.apiKey || ''
       const cleanBase = baseUrl.replace(/\/+$/, '')
 
       const headers: Record<string, string> = {}
-      if (this.configuration.apiKey) {
-        headers['Authorization'] = `Bearer ${this.configuration.apiKey}`
+      if (apiKey) {
+        headers['Authorization'] = `Bearer ${apiKey}`
       }
 
       const response = await fetch(`${cleanBase}/models`, {
@@ -404,7 +478,9 @@ export class VercelAiAgentService {
     try {
       const { createOpenAI, streamText, tool, isStepCount } = await getAiSdk()
 
-      const baseUrl = this.configuration.baseUrl || 'http://127.0.0.1:20128/v1'
+      const localCfg = resolveLocalAiConfig()
+      const baseUrl = this.configuration.baseUrl || localCfg.baseUrl || 'http://127.0.0.1:20128/v1'
+      const apiKey = this.configuration.apiKey || localCfg.apiKey || ''
       const cleanBase = baseUrl.replace(/\/+$/, '')
 
       let selectedModel = model || this.configuration.defaultModel || 'Antigravity'
@@ -425,7 +501,7 @@ export class VercelAiAgentService {
       // Instansiasi OpenAI provider Vercel AI SDK dengan endpoint konfigurasi
       const openaiProvider = createOpenAI({
         baseURL: cleanBase,
-        apiKey: this.configuration.apiKey || 'dummy-key'
+        apiKey: apiKey || 'dummy-key'
       })
 
       const aiModel = openaiProvider.chat(selectedModel)

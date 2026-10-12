@@ -99,6 +99,7 @@ export interface ElectronAPI {
   }) => Promise<{ accepted: boolean }>
   startOpenCodeStream: (payload: {
     requestId: string
+    sessionId?: string
     model?: string
     messages: Array<{
       role: 'system' | 'user' | 'assistant'
@@ -109,11 +110,13 @@ export interface ElectronAPI {
   }) => Promise<{ accepted: boolean }>
   abortOpenCodeStream: (requestId: string) => Promise<{ aborted: boolean }>
   fetchOpenCodeModels: () => Promise<Array<{ id: string; name: string; provider?: string; category: string; isFree?: boolean; source?: string }>>
-  fetchOpenCodeSessions: () => Promise<Array<{ id: string; title: string; updated?: string; dateGroup?: string; timestamp?: number; subtitle?: string; isPinned?: boolean }>>
+  getOpenCodeConfigPath: () => Promise<string>
+  fetchOpenCodeSessions: (projectRoot?: string) => Promise<Array<{ id: string; title: string; updated?: string; dateGroup?: string; timestamp?: number; subtitle?: string; isPinned?: boolean; messageCount?: number; model?: string }>>
   loadOpenCodeSession: (sessionId: string) => Promise<{ id: string; title: string; messages: any[] } | null>
   deleteOpenCodeSession: (sessionId: string) => Promise<boolean>
   startClaudeStream: (payload: {
     requestId: string
+    sessionId?: string
     model?: string
     messages: Array<{
       role: 'system' | 'user' | 'assistant'
@@ -124,7 +127,8 @@ export interface ElectronAPI {
   }) => Promise<{ accepted: boolean }>
   abortClaudeStream: (requestId: string) => Promise<{ aborted: boolean }>
   fetchClaudeModels: () => Promise<Array<{ id: string; name: string; provider?: string; category: string; isFree?: boolean; source?: string }>>
-  fetchClaudeSessions: () => Promise<Array<{ id: string; title: string; updated?: string; dateGroup?: string; timestamp?: number; subtitle?: string; isPinned?: boolean }>>
+  getClaudeConfigPath: () => Promise<string>
+  fetchClaudeSessions: (projectRoot?: string) => Promise<Array<{ id: string; title: string; updated?: string; dateGroup?: string; timestamp?: number; subtitle?: string; isPinned?: boolean; messageCount?: number; model?: string }>>
   loadClaudeSession: (sessionId: string) => Promise<{ id: string; title: string; messages: any[] } | null>
   deleteClaudeSession: (sessionId: string) => Promise<boolean>
   gitGetStatus: (projectPath: string) => Promise<{
@@ -192,6 +196,7 @@ export interface ElectronAPI {
   onAgentFileModified: (callback: (data: FileModifiedEventPayload) => void) => () => void
   onAgentStreamDone: (callback: (data: { requestId: string; fullContent?: string; isAborted?: boolean }) => void) => () => void
   onAgentStreamError: (callback: (data: { requestId: string; errorMessage: string }) => void) => () => void
+  onAgentSessionLinked: (callback: (data: { clientSessionId: string; openCodeSessionId: string }) => void) => () => void
 
   // SQLite Main Database API
   dbGetInfo: () => Promise<{ dbPath: string; exists: boolean; sizeBytes: number; tableCount: number; tables: string[]; version: string }>

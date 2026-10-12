@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useClaudeStore, type ClaudeModelItem } from '@renderer/stores/claudeStore'
+import { useWorkspaceStore } from '@renderer/stores/workspaceStore'
 
 const props = defineProps<{
   isOpen: boolean
@@ -12,10 +13,27 @@ const emit = defineEmits<{
 }>()
 
 const claudeStore = useClaudeStore()
+const workspaceStore = useWorkspaceStore()
 const searchQuery = ref('')
 const searchInputRef = ref<HTMLInputElement | null>(null)
 const selectedIndex = ref(0)
 const listContainerRef = ref<HTMLElement | null>(null)
+
+async function openConfigFile() {
+  try {
+    let cfgPath = ''
+    if (window.makaryaAPI?.getClaudeConfigPath) {
+      cfgPath = await window.makaryaAPI.getClaudeConfigPath()
+    }
+    if (cfgPath) {
+      const fileName = cfgPath.split(/[\\/]/).pop() || 'config.json'
+      await workspaceStore.openFile(cfgPath, fileName)
+      emit('close')
+    }
+  } catch (err) {
+    console.warn('Gagal membuka file config Claude:', err)
+  }
+}
 
 // Group models by category
 const filteredModels = computed(() => {
@@ -145,13 +163,22 @@ onUnmounted(() => {
           <div class="text-[10px] text-slate-400">Pilih model untuk inferensi Claude Agent</div>
         </div>
       </div>
-      <button
-        @click="emit('close')"
-        class="w-6 h-6 rounded-lg flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/[0.08] transition-colors cursor-pointer"
-        title="Tutup pilihan model (esc)"
-      >
-        <UIcon name="i-lucide-x" class="size-3.5" />
-      </button>
+      <div class="flex items-center gap-1.5">
+        <button
+          @click="openConfigFile"
+          class="w-6 h-6 rounded-lg flex items-center justify-center text-slate-400 hover:text-[#f59e0b] hover:bg-[#d97706]/15 transition-colors cursor-pointer"
+          title="Buka & edit file konfigurasi Claude (~/.claude/settings.json)"
+        >
+          <UIcon name="i-lucide-wrench" class="size-3.5" />
+        </button>
+        <button
+          @click="emit('close')"
+          class="w-6 h-6 rounded-lg flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/[0.08] transition-colors cursor-pointer"
+          title="Tutup pilihan model (esc)"
+        >
+          <UIcon name="i-lucide-x" class="size-3.5" />
+        </button>
+      </div>
     </div>
 
     <!-- Search Input -->

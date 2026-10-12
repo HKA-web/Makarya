@@ -23,6 +23,14 @@ export interface AttachedFileMeta {
   selectedSnippet?: string
 }
 
+export interface AgentQuestion {
+  toolCallId?: string
+  question: string
+  options: string[]
+  isMultiSelect?: boolean
+  selectedOption?: string | string[]
+}
+
 export interface ChatMessage {
   id: string
   role: 'system' | 'user' | 'assistant'
@@ -33,6 +41,12 @@ export interface ChatMessage {
   thinkingDurationSeconds?: number
   activeAction?: string
   toolCalls?: AgentToolCallItem[]
+  pendingQuestion?: AgentQuestion
+  pendingApproval?: {
+    type: 'file_edit' | 'command_exec'
+    description: string
+    payload: any
+  }
   modifiedFiles?: Array<{
     filePath: string
     fileName: string
@@ -105,6 +119,7 @@ export const useAgentStore = defineStore('agentStore', () => {
   // Selected model: follow settingsStore.ai.defaultModel first, then localStorage
   const savedModel = localStorage.getItem('makarya_agent_selected_model') || ''
   const selectedModel = ref<string>(settingsStore.ai.defaultModel || savedModel || '')
+  const executionMode = ref<'agent' | 'chat'>('agent')
   const availableModels = ref<string[]>([])
   const isModelsLoading = ref<boolean>(false)
 
@@ -425,6 +440,28 @@ export const useAgentStore = defineStore('agentStore', () => {
 
     // 3b. Tool Require Approval (Ask Before Execution)
     cleanupToolRequireApprovalListener = window.makaryaAPI.onAgentToolRequireApproval?.((data) => {
+      // If Auto Execution is set to 'always_proceed' in Settings, auto-respond immediately without interrupting user!
+      if (settingsStore.ai.autoExecution === 'always_proceed' && window.makaryaAPI?.respondToolApproval) {
+        window.makaryaAPI.respondToolApproval(data.toolCallId, true)
+        const targetMessage = messages.value.find((msg) => msg.id === data.requestId)
+        if (targetMessage) {
+          if (!targetMessage.toolCalls) targetMessage.toolCalls = []
+          const existingTool = targetMessage.toolCalls.find((tc) => tc.id === data.toolCallId)
+          if (existingTool) {
+            existingTool.status = 'running'
+            existingTool.args = data.args
+          } else {
+            targetMessage.toolCalls.push({
+              id: data.toolCallId,
+              name: data.toolName,
+              args: data.args,
+              status: 'running'
+            })
+          }
+        }
+        return
+      }
+
       const targetMessage = messages.value.find((msg) => msg.id === data.requestId)
       if (targetMessage) {
         targetMessage.activeAction = `Menunggu izin eksekusi: ${data.toolName}...`
@@ -695,7 +732,8 @@ export const useAgentStore = defineStore('agentStore', () => {
       startLine?: number
       endLine?: number
       selectedSnippet?: string
-    }>
+    }>,
+    displayPrompt?: string
   ): Promise<void> {
     const cleanPrompt = promptText.trim()
     const hasImages = Array.isArray(images) && images.length > 0
@@ -726,7 +764,7 @@ export const useAgentStore = defineStore('agentStore', () => {
     const userMessage: ChatMessage = {
       id: userMessageId,
       role: 'user',
-      content: cleanPrompt,
+      content: (displayPrompt || cleanPrompt).trim(),
       images: hasImages ? [...images] : undefined,
       attachedFiles: hasFiles
         ? attachedFileContexts.map((f) => ({
@@ -738,7 +776,7 @@ export const useAgentStore = defineStore('agentStore', () => {
             selectedSnippet: f.selectedSnippet
           }))
         : undefined,
-      timestamp: settingsStore.formatTimestamp(new Date())
+      timestamp: settingsStore.formatTimestamp(new Date()) || new Date().toISOString()
     }
     messages.value.push(userMessage)
 
@@ -772,7 +810,7 @@ export const useAgentStore = defineStore('agentStore', () => {
       thinkingDurationSeconds: 1,
       activeAction: 'Working...',
       toolCalls: [],
-      timestamp: 'Sedang bekerja...',
+      timestamp: settingsStore.formatTimestamp(new Date()) || new Date().toISOString(),
       isStreaming: true
     }
 
@@ -1010,6 +1048,26 @@ export const useAgentStore = defineStore('agentStore', () => {
     }
   }
 
+  async function submitQuestionAnswer(msgId: string, chosenOption: string) {
+    const msg = messages.value.find((m) => m.id === msgId)
+    if (msg && msg.pendingQuestion) {
+      msg.pendingQuestion.selectedOption = chosenOption
+      await sendMessage(`Jawaban untuk pertanyaan "${msg.pendingQuestion.question}": ${chosenOption}`)
+    }
+  }
+
+  function approveAction(messageId: string, approved: boolean): void {
+    const msg = messages.value.find((m) => m.id === messageId)
+    if (msg && msg.pendingApproval) {
+      if (approved) {
+        msg.content += '\n\n*(Aksi telah disetujui pengguna)*'
+      } else {
+        msg.content += '\n\n*(Aksi dibatalkan oleh pengguna)*'
+      }
+      delete msg.pendingApproval
+    }
+  }
+
   return {
     messages,
     currentSessionId,
@@ -1022,6 +1080,7 @@ export const useAgentStore = defineStore('agentStore', () => {
     activeRequestId,
     selectedModel,
     setSelectedModel,
+    executionMode,
     availableModels,
     includeActiveFileContext,
     sessionModifiedFiles,
@@ -1040,6 +1099,8 @@ export const useAgentStore = defineStore('agentStore', () => {
     acceptFileChanges,
     rejectFileChanges,
     removeModifiedFile,
-    approveToolCall
+    approveToolCall,
+    submitQuestionAnswer,
+    approveAction
   }
 })

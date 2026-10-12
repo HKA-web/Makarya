@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { useWorkspaceStore } from './workspaceStore'
 
 export interface ClaudeToolCall {
   id: string
@@ -27,6 +28,7 @@ export interface ClaudeMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
   content: string
+  displayPrompt?: string
   timestamp: number
   isStreaming?: boolean
   thinking?: string
@@ -66,16 +68,13 @@ export interface ClaudeSessionItem {
 }
 
 export const DEFAULT_CLAUDE_MODELS: ClaudeModelItem[] = [
-  { id: 'claude-3-7-sonnet-20250219', name: 'Claude 3.7 Sonnet (Thinking)', provider: 'Anthropic', category: 'Claude Recommended', isFree: false },
-  { id: 'claude-3-5-sonnet-20241022', name: 'Claude 3.5 Sonnet v2', provider: 'Anthropic', category: 'Claude 3.5 Series', isFree: false },
-  { id: 'claude-3-5-haiku-20241022', name: 'Claude 3.5 Haiku', provider: 'Anthropic', category: 'Claude 3.5 Series', isFree: true },
-  { id: 'claude-3-opus-20240229', name: 'Claude 3 Opus', provider: 'Anthropic', category: 'Claude Legacy', isFree: false }
+  { id: 'Antigravity', name: 'Antigravity', provider: 'Anthropic', category: 'Claude Config', isFree: false }
 ]
 
 export const useClaudeStore = defineStore('claudeStore', () => {
   const isConnected = ref<boolean>(true)
   const isExecuting = ref<boolean>(false)
-  const currentModel = ref<string>('claude-3-7-sonnet-20250219')
+  const currentModel = ref<string>('Antigravity')
   const models = ref<ClaudeModelItem[]>([...DEFAULT_CLAUDE_MODELS])
   const availableModels = ref<string[]>([...DEFAULT_CLAUDE_MODELS.map((m) => m.id)])
   const executionMode = ref<'agent' | 'chat' | 'plan'>('agent')
@@ -86,7 +85,7 @@ export const useClaudeStore = defineStore('claudeStore', () => {
         id: currentModel.value,
         name: currentModel.value,
         provider: 'Anthropic',
-        category: 'Claude Recommended',
+        category: 'Claude Config',
         isFree: false
       }
     )
@@ -134,12 +133,7 @@ export const useClaudeStore = defineStore('claudeStore', () => {
           availableModels.value = discovered.map((m) => m.id)
 
           if (!models.value.some((m) => m.id === currentModel.value)) {
-            const defaultMdl =
-              models.value.find((m) => m.id.includes('claude-3-7') || m.id.includes('claude-3-5-sonnet') || m.id.includes('claude')) ||
-              models.value[0]
-            if (defaultMdl) {
-              currentModel.value = defaultMdl.id
-            }
+            currentModel.value = models.value[0]?.id || 'Antigravity'
           }
           return
         }
@@ -342,9 +336,20 @@ export const useClaudeStore = defineStore('claudeStore', () => {
       isExecuting.value = false
       syncCurrentSessionToHistory()
     })
+
+    // Dynamic Session Link from Claude CLI
+    if (window.makaryaAPI?.onAgentSessionLinked) {
+      window.makaryaAPI.onAgentSessionLinked((data: { clientSessionId: string; claudeSessionId?: string; openCodeSessionId?: string }) => {
+        if (data.claudeSessionId) {
+          if (activeSessionId.value === data.clientSessionId || activeSessionId.value.endsWith(data.clientSessionId)) {
+            activeSessionId.value = data.claudeSessionId
+          }
+        }
+      })
+    }
   }
 
-  async function sendPrompt(text: string, projectRoot?: string) {
+  async function sendPrompt(text: string, projectRoot?: string, displayPrompt?: string) {
     const trimmed = text.trim()
     if (!trimmed || isExecuting.value) return
 
@@ -354,19 +359,21 @@ export const useClaudeStore = defineStore('claudeStore', () => {
     // 1. Add User Message
     const userMsg = addMessage({
       role: 'user',
-      content: trimmed
+      content: trimmed,
+      displayPrompt: displayPrompt || trimmed
     })
 
     // Update Session Title if it's default
     if (activeSessionTitle.value.startsWith('New session') || activeSessionTitle.value.startsWith('Sesi Baru')) {
-      const cleanSummary = trimmed.split('\n')[0].replace(/\[.*?\]/g, '').trim()
+      const summarySource = displayPrompt || trimmed
+      const cleanSummary = summarySource.split('\n')[0].replace(/\[.*?\]/g, '').trim()
       const newTitle = cleanSummary.length > 40 ? cleanSummary.slice(0, 40) + '...' : cleanSummary || 'Claude Session'
       activeSessionTitle.value = newTitle
 
       const curSession = sessions.value.find((s) => s.id === activeSessionId.value)
       if (curSession) {
         curSession.title = newTitle
-        curSession.subtitle = trimmed.slice(0, 60)
+        curSession.subtitle = summarySource.slice(0, 60)
       }
     }
 
@@ -396,15 +403,11 @@ export const useClaudeStore = defineStore('claudeStore', () => {
         content: m.content
       }))
 
-    historyPayload.push({
-      role: 'user',
-      content: trimmed
-    })
-
     try {
       if (window.makaryaAPI?.startClaudeStream) {
         await window.makaryaAPI.startClaudeStream({
           requestId: reqId,
+          sessionId: activeSessionId.value,
           model: currentModel.value,
           messages: historyPayload,
           projectRoot: projectRoot || undefined,
@@ -466,36 +469,72 @@ export const useClaudeStore = defineStore('claudeStore', () => {
     syncCurrentSessionToHistory()
   }
 
-  async function loadSessions() {
+  async function loadSessions(projectRoot?: string) {
     isLoadingSessions.value = true
     try {
+      const workspaceStore = useWorkspaceStore()
+      const effectiveRoot =
+        projectRoot ||
+        currentActiveProjectRoot ||
+        workspaceStore.getEffectiveProjectRoot() ||
+        workspaceStore.activeRootPath ||
+        workspaceStore.workspaceRoots[0]?.path
+
       const sessionList: ClaudeSessionItem[] = []
 
-      // 1. Fetch from SQLite database if available
+      // 1. Fetch native Claude CLI sessions (~/.claude/projects/ as used by /resume)
+      if (window.makaryaAPI?.fetchClaudeSessions) {
+        try {
+          const cliSessions = await window.makaryaAPI.fetchClaudeSessions(effectiveRoot)
+          if (Array.isArray(cliSessions) && cliSessions.length > 0) {
+            for (const s of cliSessions) {
+              sessionList.push({
+                id: s.id,
+                title: s.title || `Claude Session ${s.id.slice(0, 8)}`,
+                updated: s.updated,
+                dateGroup: s.dateGroup || getDateGroup(s.timestamp),
+                timestamp: s.timestamp || Date.now(),
+                updatedAt: (s as any).updatedAt || (s.timestamp ? new Date(s.timestamp).toISOString() : undefined),
+                lastMessage: (s as any).lastMessage || s.subtitle || 'Percakapan Claude CLI',
+                subtitle: s.subtitle || (s as any).lastMessage || 'Percakapan Claude CLI',
+                messageCount: (s as any).messageCount || 1,
+                model: (s as any).model || currentModel.value,
+                isPinned: s.isPinned
+              })
+            }
+          }
+        } catch (cliErr) {
+          console.warn('Gagal memuat sesi native Claude CLI:', cliErr)
+        }
+      }
+
+      // 2. Fetch from SQLite database if available as fallback / local storage
       if (window.makaryaAPI?.dbGetChatSessions) {
         const dbSessions = await window.makaryaAPI.dbGetChatSessions()
         if (Array.isArray(dbSessions)) {
           for (const s of dbSessions) {
             if (s.id.startsWith('claude_')) {
               const rawId = s.id.replace('claude_', '')
-              sessionList.push({
-                id: rawId,
-                title: s.title || `Claude Session ${rawId}`,
-                updated: s.updatedAt ? new Date(s.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : undefined,
-                dateGroup: getDateGroup(s.updatedAt || s.createdAt),
-                timestamp: s.updatedAt ? new Date(s.updatedAt).getTime() : Date.now(),
-                updatedAt: s.updatedAt || s.createdAt,
-                lastMessage: s.lastMessage || 'Percakapan tersimpan',
-                subtitle: s.lastMessage || 'Percakapan tersimpan',
-                messageCount: s.messageCount || 1,
-                model: s.model || currentModel.value
-              })
+              if (!sessionList.some((item) => item.id === rawId || item.id === s.id)) {
+                sessionList.push({
+                  id: rawId,
+                  title: s.title || `Claude Session ${rawId}`,
+                  updated: s.updatedAt ? new Date(s.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : undefined,
+                  dateGroup: getDateGroup(s.updatedAt || s.createdAt),
+                  timestamp: s.updatedAt ? new Date(s.updatedAt).getTime() : Date.now(),
+                  updatedAt: s.updatedAt || s.createdAt,
+                  lastMessage: s.lastMessage || 'Percakapan tersimpan',
+                  subtitle: s.lastMessage || 'Percakapan tersimpan',
+                  messageCount: s.messageCount || 1,
+                  model: s.model || currentModel.value
+                })
+              }
             }
           }
         }
       }
 
-      // 2. Merge in-memory sessions
+      // 3. Merge in-memory sessions
       for (const [sId, msgs] of Object.entries(sessionHistoryMap.value)) {
         if (!sessionList.some((item) => item.id === sId)) {
           const firstUserMsg = msgs.find((m) => m.role === 'user')
@@ -516,8 +555,8 @@ export const useClaudeStore = defineStore('claudeStore', () => {
         }
       }
 
-      // 3. Ensure active session is present
-      if (activeSessionId.value && !sessionList.some((s) => s.id === activeSessionId.value)) {
+      // 4. Ensure active session is present if it has messages
+      if (activeSessionId.value && messages.value.length > 0 && !sessionList.some((s) => s.id === activeSessionId.value)) {
         const lastMsg = messages.value[messages.value.length - 1]
         sessionList.unshift({
           id: activeSessionId.value,
@@ -552,7 +591,7 @@ export const useClaudeStore = defineStore('claudeStore', () => {
     if (timerInterval) clearInterval(timerInterval)
     syncCurrentSessionToHistory()
 
-    const newId = 'c_ses_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 4)
+    const newId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : ('c_ses_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 4))
     const newTitle = `New session - ${new Date().toISOString()}`
     activeSessionId.value = newId
     activeSessionTitle.value = newTitle
@@ -563,10 +602,10 @@ export const useClaudeStore = defineStore('claudeStore', () => {
     sessions.value.unshift({
       id: newId,
       title: newTitle,
-      updated: 'Just now',
-      dateGroup: 'TODAY',
+      updated: 'Baru saja',
+      dateGroup: 'HARI INI',
       timestamp: Date.now(),
-      subtitle: 'Claude Greeting'
+      subtitle: 'Percakapan Claude Baru'
     })
 
     if (window.makaryaAPI?.dbCreateSession) {
@@ -595,11 +634,30 @@ export const useClaudeStore = defineStore('claudeStore', () => {
         activeSessionTitle.value = found.title
       }
 
+      // 1. In-memory check
       if (sessionHistoryMap.value[sessionId] && sessionHistoryMap.value[sessionId].length > 0) {
         messages.value = JSON.parse(JSON.stringify(sessionHistoryMap.value[sessionId]))
         return true
       }
 
+      // 2. Load directly from native Claude CLI storage (.jsonl transcript, exactly as /resume)
+      if (window.makaryaAPI?.loadClaudeSession) {
+        try {
+          const loaded = await window.makaryaAPI.loadClaudeSession(sessionId)
+          if (loaded && Array.isArray(loaded.messages) && loaded.messages.length > 0) {
+            messages.value = loaded.messages
+            sessionHistoryMap.value[sessionId] = JSON.parse(JSON.stringify(loaded.messages))
+            if (loaded.title) {
+              activeSessionTitle.value = loaded.title
+            }
+            return true
+          }
+        } catch (cliErr) {
+          console.warn('Gagal memuat sesi transcript native Claude CLI:', cliErr)
+        }
+      }
+
+      // 3. Fallback to SQLite DB
       if (window.makaryaAPI?.dbGetChatHistory) {
         const dbSessionId = sessionId.startsWith('claude_') ? sessionId : 'claude_' + sessionId
         let history = await window.makaryaAPI.dbGetChatHistory(dbSessionId, 200)
@@ -638,6 +696,10 @@ export const useClaudeStore = defineStore('claudeStore', () => {
   async function deleteSession(sessionId: string): Promise<boolean> {
     try {
       delete sessionHistoryMap.value[sessionId]
+
+      if (window.makaryaAPI?.deleteClaudeSession) {
+        await window.makaryaAPI.deleteClaudeSession(sessionId).catch(() => {})
+      }
 
       if (window.makaryaAPI?.dbDeleteSession) {
         const dbSessionId = sessionId.startsWith('claude_') ? sessionId : 'claude_' + sessionId

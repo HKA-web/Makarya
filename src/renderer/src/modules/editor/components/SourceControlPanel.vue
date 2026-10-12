@@ -242,15 +242,6 @@ function handleCommitKeydown(e: KeyboardEvent) {
           <span v-if="gitStore.behind > 0" class="text-[9px] font-mono font-bold leading-none">{{ gitStore.behind }}</span>
         </button>
 
-        <!-- Close / Collapse Panel Button -->
-        <button
-          @click="workspaceStore.toggleSourceControlPanel()"
-          @mouseenter="showActionTooltip('Tutup Panel Source Control', $event)"
-          @mouseleave="hideActionTooltip"
-          class="w-6 h-6 rounded-full flex items-center justify-center text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
-        >
-          <UIcon name="i-lucide-x" class="size-3.5" />
-        </button>
       </div>
     </div>
 

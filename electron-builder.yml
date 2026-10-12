@@ -15,6 +15,10 @@ npmRebuild: false
 asarUnpack:
   - "**/*.node"
   - "**/node-pty/**"
+  - "**/@vscode/ripgrep/**"
+  - "**/@vscode/ripgrep-*/**"
+  - "**/*rg.exe*"
+  - "**/*rg*"
 
 win:
   icon: build/icon.ico

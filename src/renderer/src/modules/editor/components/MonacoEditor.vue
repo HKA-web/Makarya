@@ -7,6 +7,8 @@ import { useSettingsStore } from '@renderer/stores/settingsStore'
 import { usePluginStore } from '@renderer/stores/pluginStore'
 import { computeInlineDiff, InlineDiffResult } from '@renderer/utils/diffEngine'
 import { registerAutoRenameTagProvider, setupAutoCloseTag } from '@renderer/utils/tagIntelligence'
+import { detectMonacoLanguage } from '@renderer/utils/languageDetector'
+import { setupMonacoLanguages } from '@renderer/utils/monacoLanguages'
 import { globalPluginEvents } from '@renderer/sdk/runtime'
 
 const props = withDefaults(
@@ -19,7 +21,7 @@ const props = withDefaults(
   }>(),
   {
     modelValue: '',
-    language: 'javascript',
+    language: '',
     readOnly: false,
     filePath: '',
     tabId: ''
@@ -296,8 +298,13 @@ const textModelsMap = new Map<string, monaco.editor.ITextModel>()
 
 function getOrCreateTextModel(tabId: string, filePath: string, content: string, language: string): monaco.editor.ITextModel {
   const modelKey = tabId || filePath || 'default'
+  const resolvedLang = language || (filePath ? detectMonacoLanguage(filePath) : 'plaintext')
+
   const existing = textModelsMap.get(modelKey)
   if (existing && !existing.isDisposed()) {
+    if (resolvedLang && existing.getLanguageId() !== resolvedLang) {
+      monaco.editor.setModelLanguage(existing, resolvedLang)
+    }
     return existing
   }
 
@@ -309,10 +316,13 @@ function getOrCreateTextModel(tabId: string, filePath: string, content: string, 
   const existingByUri = monaco.editor.getModel(uri)
   if (existingByUri && !existingByUri.isDisposed()) {
     textModelsMap.set(modelKey, existingByUri)
+    if (resolvedLang && existingByUri.getLanguageId() !== resolvedLang) {
+      monaco.editor.setModelLanguage(existingByUri, resolvedLang)
+    }
     return existingByUri
   }
 
-  const model = monaco.editor.createModel(content, language, uri)
+  const model = monaco.editor.createModel(content, resolvedLang, uri)
   textModelsMap.set(modelKey, model)
 
   // Listen to model changes - strictly tied to this specific tabId
@@ -441,12 +451,13 @@ onMounted(() => {
   if (!editorContainerRef.value) return
 
   registerCustomThemes()
+  setupMonacoLanguages()
   registerAutoRenameTagProvider(monaco)
 
   // Always get or create model for current initial tab
   const targetTab = workspaceStore.tabList.find((t) => t.id === props.tabId) || workspaceStore.activeTab
   const targetFilePath = targetTab?.filePath || props.filePath || ''
-  const targetLanguage = targetTab?.language || props.language || 'plaintext'
+  const targetLanguage = targetTab?.language || detectMonacoLanguage(targetFilePath) || props.language || 'plaintext'
   const targetContent = isDiffActive.value && diffData.value
     ? diffData.value.unifiedText
     : (targetTab?.content !== undefined ? targetTab.content : props.modelValue)
@@ -458,10 +469,9 @@ onMounted(() => {
     targetLanguage
   )
 
-  // Initialize Monaco editor instance
+  // Initialize Monaco editor instance (language is handled directly by initialModel)
   editorInstance = monaco.editor.create(editorContainerRef.value, {
     model: initialModel,
-    language: props.language,
     theme: settingsStore.editor.theme,
     readOnly: isDiffActive.value || props.readOnly,
     automaticLayout: false,
@@ -539,6 +549,25 @@ onMounted(() => {
   editorInstance.onDidLayoutChange(() => {
     if (isDiffActive.value) {
       updateHunkPositions()
+    }
+  })
+
+  // Explicit Monaco Find (Ctrl+F) and Replace (Ctrl+H) action triggers
+  editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyF, () => {
+    const findAction = editorInstance?.getAction('actions.find')
+    if (findAction) {
+      findAction.run()
+    } else {
+      editorInstance?.trigger('keyboard', 'actions.find', {})
+    }
+  })
+
+  editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyH, () => {
+    const replaceAction = editorInstance?.getAction('editor.action.startFindReplaceAction')
+    if (replaceAction) {
+      replaceAction.run()
+    } else {
+      editorInstance?.trigger('keyboard', 'editor.action.startFindReplaceAction', {})
     }
   })
 
@@ -640,8 +669,9 @@ function tagEditorSelectionToAgent(ed?: monaco.editor.IStandaloneCodeEditor | nu
   const currentEd = ed || editorInstance || workspaceStore.getActiveEditorInstance()
   const activeTab = workspaceStore.activeTab
 
-  if (!workspaceStore.isCopilotPanelOpen) {
-    workspaceStore.isCopilotPanelOpen = true
+  // Ensure an agent panel is open
+  if (!workspaceStore.isOpenCodePanelOpen && !workspaceStore.isCopilotPanelOpen && !workspaceStore.isClaudePanelOpen) {
+    workspaceStore.isOpenCodePanelOpen = true
   }
 
   if (currentEd) {
@@ -720,11 +750,14 @@ watch(
       const targetTab = workspaceStore.tabList.find((t) => t.id === newTabId) || workspaceStore.activeTab
       const targetFilePath = targetTab?.filePath || props.filePath || ''
       const targetContent = targetTab?.content !== undefined ? targetTab.content : props.modelValue
-      const targetLanguage = targetTab?.language || props.language || 'plaintext'
+      const targetLanguage = targetTab?.language || detectMonacoLanguage(targetFilePath) || props.language || 'plaintext'
 
       const model = getOrCreateTextModel(newTabId, targetFilePath, targetContent, targetLanguage)
       if (editorInstance.getModel() !== model) {
         editorInstance.setModel(model)
+      }
+      if (targetLanguage && model.getLanguageId() !== targetLanguage) {
+        monaco.editor.setModelLanguage(model, targetLanguage)
       }
 
       if (isDiffActive.value) {
@@ -737,6 +770,23 @@ watch(
       }
 
       editorInstance.focus()
+    }
+  }
+)
+
+// Dynamic Language Watcher: Ensure active editor model reflects tab language changes
+watch(
+  () => {
+    const activeTab = workspaceStore.tabList.find((t) => t.id === props.tabId) || workspaceStore.activeTab
+    return { id: activeTab?.id, language: activeTab?.language, filePath: activeTab?.filePath }
+  },
+  (info) => {
+    if (!editorInstance || !info?.id) return
+    const resolvedLang = info.language || (info.filePath ? detectMonacoLanguage(info.filePath) : undefined)
+    if (!resolvedLang) return
+    const model = editorInstance.getModel()
+    if (model && model.getLanguageId() !== resolvedLang) {
+      monaco.editor.setModelLanguage(model, resolvedLang)
     }
   }
 )

@@ -100,6 +100,7 @@ const makaryaAPI = {
     ipcRenderer.invoke('agent:chat-stream', payload),
   startOpenCodeStream: (payload: {
     requestId: string
+    sessionId?: string
     model?: string
     messages: Array<{
       role: 'system' | 'user' | 'assistant'
@@ -113,14 +114,17 @@ const makaryaAPI = {
     ipcRenderer.invoke('opencode:chat-abort', requestId),
   fetchOpenCodeModels: (): Promise<Array<{ id: string; name: string; provider?: string; category: string; isFree?: boolean; source?: string }>> =>
     ipcRenderer.invoke('opencode:get-models'),
-  fetchOpenCodeSessions: (): Promise<Array<{ id: string; title: string; updated?: string; dateGroup?: string; timestamp?: number; subtitle?: string; isPinned?: boolean }>> =>
-    ipcRenderer.invoke('opencode:session-list'),
+  getOpenCodeConfigPath: (): Promise<string> =>
+    ipcRenderer.invoke('opencode:get-config-path'),
+  fetchOpenCodeSessions: (projectRoot?: string): Promise<Array<{ id: string; title: string; updated?: string; dateGroup?: string; timestamp?: number; subtitle?: string; isPinned?: boolean; messageCount?: number; model?: string }>> =>
+    ipcRenderer.invoke('opencode:session-list', projectRoot),
   loadOpenCodeSession: (sessionId: string): Promise<{ id: string; title: string; messages: any[] } | null> =>
     ipcRenderer.invoke('opencode:session-load', sessionId),
   deleteOpenCodeSession: (sessionId: string): Promise<boolean> =>
     ipcRenderer.invoke('opencode:session-delete', sessionId),
   startClaudeStream: (payload: {
     requestId: string
+    sessionId?: string
     model?: string
     messages: Array<{
       role: 'system' | 'user' | 'assistant'
@@ -134,8 +138,10 @@ const makaryaAPI = {
     ipcRenderer.invoke('claude:chat-abort', requestId),
   fetchClaudeModels: (): Promise<Array<{ id: string; name: string; provider?: string; category: string; isFree?: boolean; source?: string }>> =>
     ipcRenderer.invoke('claude:get-models'),
-  fetchClaudeSessions: (): Promise<Array<{ id: string; title: string; updated?: string; dateGroup?: string; timestamp?: number; subtitle?: string; isPinned?: boolean }>> =>
-    ipcRenderer.invoke('claude:session-list'),
+  getClaudeConfigPath: (): Promise<string> =>
+    ipcRenderer.invoke('claude:get-config-path'),
+  fetchClaudeSessions: (projectRoot?: string): Promise<Array<{ id: string; title: string; updated?: string; dateGroup?: string; timestamp?: number; subtitle?: string; isPinned?: boolean; messageCount?: number; model?: string }>> =>
+    ipcRenderer.invoke('claude:session-list', projectRoot),
   loadClaudeSession: (sessionId: string): Promise<{ id: string; title: string; messages: any[] } | null> =>
     ipcRenderer.invoke('claude:session-load', sessionId),
   deleteClaudeSession: (sessionId: string): Promise<boolean> =>
@@ -261,6 +267,13 @@ const makaryaAPI = {
     ipcRenderer.on('agent:stream-error', listener)
     return (): void => {
       ipcRenderer.removeListener('agent:stream-error', listener)
+    }
+  },
+  onAgentSessionLinked: (callback: (data: { clientSessionId: string; openCodeSessionId: string }) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, data: { clientSessionId: string; openCodeSessionId: string }): void => callback(data)
+    ipcRenderer.on('agent:session-linked', listener)
+    return (): void => {
+      ipcRenderer.removeListener('agent:session-linked', listener)
     }
   },
 

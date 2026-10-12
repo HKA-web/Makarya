@@ -101,15 +101,19 @@ async function handleGlobalKeyboard(event: KeyboardEvent): Promise<void> {
     event.preventDefault()
     workspaceStore.toggleGlobalSearch()
   } else if (isModifier && !event.shiftKey && event.key.toLowerCase() === 'f') {
-    // Global Find shortcut: Focus active editor and open Find Widget
+    // Global Find shortcut (Ctrl+F)
     const activeEl = document.activeElement as HTMLElement | null
-    const isInsideModalOrInput =
+    if (activeEl?.closest('.monaco-editor')) {
+      // Let Monaco's internal FindController handle it natively
+      return
+    }
+
+    const isInsideOtherInput =
       activeEl &&
       (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA') &&
-      !activeEl.classList.contains('inputarea') &&
-      !activeEl.closest('.monaco-findInput')
+      !activeEl.closest('.monaco-editor')
 
-    if (!isInsideModalOrInput) {
+    if (!isInsideOtherInput) {
       const activeEditor = workspaceStore.getActiveEditorInstance()
       if (activeEditor) {
         event.preventDefault()
@@ -123,15 +127,19 @@ async function handleGlobalKeyboard(event: KeyboardEvent): Promise<void> {
       }
     }
   } else if (isModifier && !event.shiftKey && event.key.toLowerCase() === 'h') {
-    // Global Find & Replace shortcut
+    // Global Find & Replace shortcut (Ctrl+H)
     const activeEl = document.activeElement as HTMLElement | null
-    const isInsideModalOrInput =
+    if (activeEl?.closest('.monaco-editor')) {
+      // Let Monaco's internal ReplaceController handle it natively
+      return
+    }
+
+    const isInsideOtherInput =
       activeEl &&
       (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA') &&
-      !activeEl.classList.contains('inputarea') &&
-      !activeEl.closest('.monaco-findInput')
+      !activeEl.closest('.monaco-editor')
 
-    if (!isInsideModalOrInput) {
+    if (!isInsideOtherInput) {
       const activeEditor = workspaceStore.getActiveEditorInstance()
       if (activeEditor) {
         event.preventDefault()

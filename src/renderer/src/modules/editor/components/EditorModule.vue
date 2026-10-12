@@ -18,6 +18,7 @@ import TabSwitcherModal from './TabSwitcherModal.vue'
 import AboutModal from './AboutModal.vue'
 import { getNuxtFileIcon } from '@renderer/utils/languageDetector'
 import logoImg from '@renderer/assets/logo.png'
+import iconImg from '@renderer/assets/icon.jpg'
 import openCodeLogo from '@renderer/assets/opencode-logo.png'
 import claudeLogo from '@renderer/assets/claude-logo.svg'
 import { useGitStore } from '@renderer/stores/gitStore'
@@ -144,6 +145,21 @@ function handleTabMouseLeave(): void {
     tabHoverTimer = null
   }
   hoverTooltip.value = null
+}
+
+function handleTabDragStart(event: DragEvent, tab: any): void {
+  if (!event.dataTransfer || !tab.filePath) return
+  event.dataTransfer.effectAllowed = 'copy'
+
+  const payload = {
+    path: tab.filePath,
+    name: tab.title,
+    isDirectory: false
+  }
+
+  event.dataTransfer.setData('text/plain', tab.filePath)
+  event.dataTransfer.setData('application/json', JSON.stringify(payload))
+  event.dataTransfer.setData('makarya/file-entry', JSON.stringify(payload))
 }
 
 // Sleek Dark Floating Action Tooltip for all UI Buttons & Controls
@@ -445,32 +461,24 @@ onUnmounted(() => {
             </svg>
           </button>
 
-          <!-- 3. Toggle Panel Source Control Kanan (Top-Right Button) -->
+          <!-- 3. Toggle Panel AI Agent Kanan (Top-Right Button) -->
           <button
             @click="
               hideActionTooltip();
-              workspaceStore.toggleSourceControlPanel();
-              if (workspaceStore.isSourceControlPanelOpen) {
-                gitStore.refreshStatus();
-              }
+              workspaceStore.toggleCopilotPanel();
             "
-            @mouseenter="showActionTooltip($event, 'Toggle Source Control (Git Changes & Commit)', undefined, 'bottom')"
+            @mouseenter="showActionTooltip($event, 'Toggle Makarya AI Agent Panel', undefined, 'bottom')"
             @mouseleave="hideActionTooltip"
             class="w-6.5 h-6.5 rounded-md flex items-center justify-center transition-all cursor-pointer relative"
-            :class="workspaceStore.isSourceControlPanelOpen
+            :class="workspaceStore.isCopilotPanelOpen
               ? 'bg-white/[0.12] text-slate-100 shadow-xs border border-white/[0.08]'
               : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04]'"
           >
             <svg viewBox="0 0 16 16" fill="none" class="size-3.5" xmlns="http://www.w3.org/2000/svg">
               <rect x="2" y="2" width="12" height="12" rx="1.5" stroke="currentColor" stroke-width="1.2" />
-              <path v-if="workspaceStore.isSourceControlPanelOpen" d="M10 2H12.5C13.3284 2 14 2.67157 14 3.5V12.5C14 13.3284 13.3284 14 12.5 14H10V2Z" fill="currentColor" />
+              <path v-if="workspaceStore.isCopilotPanelOpen" d="M10 2H12.5C13.3284 2 14 2.67157 14 3.5V12.5C14 13.3284 13.3284 14 12.5 14H10V2Z" fill="currentColor" />
               <line v-else x1="10" y1="2" x2="10" y2="14" stroke="currentColor" stroke-width="1.2" />
             </svg>
-            <!-- Git Changes Badge Dot on Header Button -->
-            <span
-              v-if="gitStore.totalChanges > 0"
-              class="absolute -top-0.5 -right-0.5 size-2 bg-emerald-400 rounded-full ring-2 ring-[#0b101b] animate-pulse"
-            ></span>
           </button>
         </div>
       </div>
@@ -537,6 +545,19 @@ onUnmounted(() => {
           <UIcon name="i-lucide-puzzle" class="size-4" />
         </button>
 
+        <!-- Makarya AI Agent -->
+        <button
+          @click="hideActionTooltip(); workspaceStore.toggleCopilotPanel()"
+          @mouseenter="showActionTooltip($event, 'Makarya AI Agent', undefined, 'right')"
+          @mouseleave="hideActionTooltip"
+          class="w-7.5 h-7.5 rounded-xl flex items-center justify-center transition-all duration-200 cursor-pointer relative"
+          :class="workspaceStore.isCopilotPanelOpen
+            ? 'bg-[#42b883]/20 text-[#42b883] border border-[#42b883]/40 shadow-xs shadow-[#42b883]/20'
+            : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04] border border-transparent hover:border-white/[0.06]'"
+        >
+          <img :src="iconImg" alt="Makarya Agent" class="size-4 rounded-xs object-contain" />
+        </button>
+
         <!-- OpenCode Autonomous Agent (CLI) -->
         <button
           @click="hideActionTooltip(); workspaceStore.toggleOpenCodePanel()"
@@ -551,6 +572,7 @@ onUnmounted(() => {
         </button>
 
         <!-- Claude Autonomous Agent (CLI) -->
+        <!-- Claude Autonomous Agent -->
         <button
           @click="hideActionTooltip(); workspaceStore.toggleClaudePanel()"
           @mouseenter="showActionTooltip($event, 'Claude Code Agent', undefined, 'right')"
@@ -591,6 +613,8 @@ onUnmounted(() => {
             <div
               v-for="tab in workspaceStore.tabList"
               :key="tab.id"
+              :draggable="Boolean(tab.filePath)"
+              @dragstart="handleTabDragStart($event, tab)"
               @click="workspaceStore.setActiveTab(tab.id)"
               @mouseenter="handleTabMouseEnter(tab, $event)"
               @mouseleave="handleTabMouseLeave"
@@ -715,8 +739,8 @@ onUnmounted(() => {
       <!-- Claude Autonomous Agent Panel -->
       <ClaudePanel v-show="workspaceStore.isClaudePanelOpen" />
 
-      <!-- Source Control Right Panel (Git GUI) -->
-      <SourceControlPanel v-show="workspaceStore.isSourceControlPanelOpen" />
+      <!-- Source Control Right Panel (Git GUI - Always Open) -->
+      <SourceControlPanel />
     </div>
 
     <!-- Editor Module Modals & Overlays -->
