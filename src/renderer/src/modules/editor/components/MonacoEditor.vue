@@ -670,7 +670,7 @@ function tagEditorSelectionToAgent(ed?: monaco.editor.IStandaloneCodeEditor | nu
   const activeTab = workspaceStore.activeTab
 
   // Ensure an agent panel is open
-  if (!workspaceStore.isOpenCodePanelOpen && !workspaceStore.isCopilotPanelOpen && !workspaceStore.isClaudePanelOpen) {
+  if (!workspaceStore.isOpenCodePanelOpen && !workspaceStore.isCopilotPanelOpen && !workspaceStore.isClaudePanelOpen && !workspaceStore.isAntigravityPanelOpen) {
     workspaceStore.isOpenCodePanelOpen = true
   }
 

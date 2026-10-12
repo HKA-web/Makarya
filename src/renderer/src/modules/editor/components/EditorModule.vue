@@ -9,6 +9,7 @@ import SourceControlPanel from './SourceControlPanel.vue'
 import AgentPanel from './AgentPanel.vue'
 import OpenCodePanel from './OpenCodePanel.vue'
 import ClaudePanel from './ClaudePanel.vue'
+import AntigravityPanel from './AntigravityPanel.vue'
 import TerminalPanel from './TerminalPanel.vue'
 import CommandPalette from './CommandPalette.vue'
 import QuickOpenModal from './QuickOpenModal.vue'
@@ -21,6 +22,7 @@ import logoImg from '@renderer/assets/logo.png'
 import iconImg from '@renderer/assets/icon.jpg'
 import openCodeLogo from '@renderer/assets/opencode-logo.png'
 import claudeLogo from '@renderer/assets/claude-logo.svg'
+import antigravityLogo from '@renderer/assets/antigravity-logo.svg'
 import { useGitStore } from '@renderer/stores/gitStore'
 
 const workspaceStore = useWorkspaceStore()
@@ -585,6 +587,19 @@ onUnmounted(() => {
           <img :src="claudeLogo" alt="Claude" class="size-4 rounded-xs object-contain" />
         </button>
 
+        <!-- Antigravity Autonomous Agent (AGY CLI) -->
+        <button
+          @click="hideActionTooltip(); workspaceStore.toggleAntigravityPanel()"
+          @mouseenter="showActionTooltip($event, 'Antigravity Autonomous Agent (AGY CLI)', undefined, 'right')"
+          @mouseleave="hideActionTooltip"
+          class="w-7.5 h-7.5 rounded-xl flex items-center justify-center transition-all duration-200 cursor-pointer relative"
+          :class="workspaceStore.isAntigravityPanelOpen
+            ? 'bg-[#2563eb]/20 text-[#60a5fa] border border-[#2563eb]/40 shadow-xs shadow-[#2563eb]/20'
+            : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04] border border-transparent hover:border-white/[0.06]'"
+        >
+          <img :src="antigravityLogo" alt="Antigravity" class="size-4 rounded-xs object-contain" />
+        </button>
+
         <div class="flex-1"></div>
 
         <!-- Sidebar Collapse / Expand Toggle Button -->
@@ -738,6 +753,9 @@ onUnmounted(() => {
 
       <!-- Claude Autonomous Agent Panel -->
       <ClaudePanel v-show="workspaceStore.isClaudePanelOpen" />
+
+      <!-- Antigravity Autonomous Agent Panel (AGY CLI) -->
+      <AntigravityPanel v-show="workspaceStore.isAntigravityPanelOpen" />
 
       <!-- Source Control Right Panel (Git GUI - Always Open) -->
       <SourceControlPanel />

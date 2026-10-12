@@ -131,6 +131,22 @@ export interface ElectronAPI {
   fetchClaudeSessions: (projectRoot?: string) => Promise<Array<{ id: string; title: string; updated?: string; dateGroup?: string; timestamp?: number; subtitle?: string; isPinned?: boolean; messageCount?: number; model?: string }>>
   loadClaudeSession: (sessionId: string) => Promise<{ id: string; title: string; messages: any[] } | null>
   deleteClaudeSession: (sessionId: string) => Promise<boolean>
+  startAntigravityStream: (payload: {
+    requestId: string
+    sessionId?: string
+    model?: string
+    messages: Array<{
+      role: 'system' | 'user' | 'assistant'
+      content: string
+    }>
+    projectRoot?: string
+    executionMode?: string
+  }) => Promise<{ accepted: boolean }>
+  abortAntigravityStream: (requestId: string) => Promise<{ aborted: boolean }>
+  fetchAntigravityModels: () => Promise<Array<{ id: string; name: string; provider?: string; category: string; isFree?: boolean; source?: string }>>
+  fetchAntigravitySessions: () => Promise<Array<{ id: string; title: string; updated?: string; dateGroup?: string; timestamp?: number; subtitle?: string; isPinned?: boolean; messageCount?: number; model?: string }>>
+  loadAntigravitySession: (sessionId: string) => Promise<{ id: string; title: string; messages: any[] } | null>
+  deleteAntigravitySession: (sessionId: string) => Promise<boolean>
   gitGetStatus: (projectPath: string) => Promise<{
     isGitRepo: boolean
     branch: string

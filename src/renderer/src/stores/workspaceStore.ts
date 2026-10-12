@@ -282,6 +282,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const isCopilotPanelOpen = ref<boolean>(false)
   const isOpenCodePanelOpen = ref<boolean>(false)
   const isClaudePanelOpen = ref<boolean>(false)
+  const isAntigravityPanelOpen = ref<boolean>(false)
   const isSourceControlPanelOpen = ref<boolean>(true)
   const isSidebarOpen = ref<boolean>(true)
   const activeSidebarTab = ref<'explorer' | 'search'>('explorer')
@@ -1237,6 +1238,10 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     isClaudePanelOpen.value = !isClaudePanelOpen.value
   }
 
+  function toggleAntigravityPanel(): void {
+    isAntigravityPanelOpen.value = !isAntigravityPanelOpen.value
+  }
+
   function toggleSourceControlPanel(): void {
     isSourceControlPanelOpen.value = !isSourceControlPanelOpen.value
   }
@@ -1337,6 +1342,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     toggleCopilotPanel,
     toggleOpenCodePanel,
     toggleClaudePanel,
+    isAntigravityPanelOpen,
+    toggleAntigravityPanel,
     toggleSourceControlPanel,
     toggleSidebar,
     createFile,

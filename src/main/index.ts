@@ -10,6 +10,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { VercelAiAgentService as AiAgentService } from './agent/vercelAiService'
 import { OpenCodeCliService } from './agent/openCodeCliService'
 import { ClaudeCliService } from './agent/claudeCliService'
+import { AntigravityCliService } from './agent/antigravityCliService'
 import { GitService } from './git/gitService'
 import { uiBuilderService } from './agent/uiBuilderService'
 import { databaseService } from './db/databaseService'
@@ -24,6 +25,7 @@ const activeBrowserWindows = new Set<BrowserWindow>()
 const aiAgentService = new AiAgentService()
 const openCodeCliService = new OpenCodeCliService()
 const claudeCliService = new ClaudeCliService(aiAgentService)
+const antigravityCliService = new AntigravityCliService()
 const gitService = new GitService(aiAgentService)
 
 interface RunningProcessInfo {
@@ -884,6 +886,39 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('claude:session-delete', async (_event, sessionId: string) => {
     return claudeCliService.deleteSession(sessionId)
+  })
+
+  // Antigravity CLI (agy) Streaming & Handlers
+  ipcMain.handle('antigravity:chat-stream', async (event, requestPayload) => {
+    const windowTarget = BrowserWindow.fromWebContents(event.sender) || primaryWindow
+    antigravityCliService.streamAntigravity(requestPayload, windowTarget).catch((streamError) => {
+      windowTarget?.webContents.send('agent:stream-error', {
+        requestId: requestPayload.requestId,
+        errorMessage: streamError.message || 'Gagal memulai stream Antigravity CLI'
+      })
+    })
+    return { accepted: true }
+  })
+
+  ipcMain.handle('antigravity:chat-abort', async (_event, requestId: string) => {
+    const isAborted = antigravityCliService.abortStream(requestId)
+    return { aborted: isAborted }
+  })
+
+  ipcMain.handle('antigravity:get-models', async () => {
+    return antigravityCliService.getDiscoveredModels()
+  })
+
+  ipcMain.handle('antigravity:session-list', async () => {
+    return antigravityCliService.listSessions()
+  })
+
+  ipcMain.handle('antigravity:session-load', async (_event, sessionId: string) => {
+    return antigravityCliService.loadSession(sessionId)
+  })
+
+  ipcMain.handle('antigravity:session-delete', async (_event, sessionId: string) => {
+    return antigravityCliService.deleteSession(sessionId)
   })
 
   // Global Text & Code Search (Find in Files)

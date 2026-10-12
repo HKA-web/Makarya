@@ -146,6 +146,28 @@ const makaryaAPI = {
     ipcRenderer.invoke('claude:session-load', sessionId),
   deleteClaudeSession: (sessionId: string): Promise<boolean> =>
     ipcRenderer.invoke('claude:session-delete', sessionId),
+  startAntigravityStream: (payload: {
+    requestId: string
+    sessionId?: string
+    model?: string
+    messages: Array<{
+      role: 'system' | 'user' | 'assistant'
+      content: string
+    }>
+    projectRoot?: string
+    executionMode?: string
+  }): Promise<{ accepted: boolean }> =>
+    ipcRenderer.invoke('antigravity:chat-stream', payload),
+  abortAntigravityStream: (requestId: string): Promise<{ aborted: boolean }> =>
+    ipcRenderer.invoke('antigravity:chat-abort', requestId),
+  fetchAntigravityModels: (): Promise<Array<{ id: string; name: string; provider?: string; category: string; isFree?: boolean; source?: string }>> =>
+    ipcRenderer.invoke('antigravity:get-models'),
+  fetchAntigravitySessions: (): Promise<Array<{ id: string; title: string; updated?: string; dateGroup?: string; timestamp?: number; subtitle?: string; isPinned?: boolean; messageCount?: number; model?: string }>> =>
+    ipcRenderer.invoke('antigravity:session-list'),
+  loadAntigravitySession: (sessionId: string): Promise<{ id: string; title: string; messages: any[] } | null> =>
+    ipcRenderer.invoke('antigravity:session-load', sessionId),
+  deleteAntigravitySession: (sessionId: string): Promise<boolean> =>
+    ipcRenderer.invoke('antigravity:session-delete', sessionId),
   gitGetStatus: (projectPath: string): Promise<any> =>
     ipcRenderer.invoke('git:get-status', projectPath),
   gitStage: (projectPath: string, filePath: string): Promise<boolean> =>
