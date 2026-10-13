@@ -1,0 +1,3 @@
+[submodule "packages/makarya-sdk"]
+	path = packages/makarya-sdk
+	url = https://github.com/HKA-web/Makarya.Plugins.git
