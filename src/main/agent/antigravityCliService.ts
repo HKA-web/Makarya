@@ -188,6 +188,7 @@ export class AntigravityCliService {
         cwd,
         shell: true,
         stdio: ['pipe', 'pipe', 'pipe'],
+        windowsHide: true,
         env: { ...process.env, FORCE_COLOR: '0' }
       })
 
@@ -312,10 +313,26 @@ export class AntigravityCliService {
   public abortStream(requestId: string): boolean {
     const proc = this.activeProcesses.get(requestId)
     if (proc) {
+      const pid = proc.pid
       try {
-        proc.kill()
-      } catch (e) {
-        console.warn('Gagal mematikan proses Antigravity CLI:', e)
+        proc.stdin?.destroy()
+        proc.stdout?.destroy()
+        proc.stderr?.destroy()
+      } catch {}
+
+      if (pid) {
+        if (process.platform === 'win32') {
+          try {
+            spawn('taskkill', ['/PID', pid.toString(), '/T', '/F'], { windowsHide: true })
+          } catch (e) {
+            console.warn('Gagal taskkill Antigravity CLI:', e)
+          }
+        }
+        try {
+          proc.kill('SIGKILL')
+        } catch (e) {
+          console.warn('Gagal mematikan proses Antigravity CLI:', e)
+        }
       }
       this.activeProcesses.delete(requestId)
       return true

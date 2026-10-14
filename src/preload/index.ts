@@ -76,6 +76,16 @@ const makaryaAPI = {
     ipcRenderer.invoke('fs:search-workspace-files', rootPaths),
   saveImageToProject: (projectRoot: string, fileName: string, base64Data: string): Promise<{ success: boolean; absolutePath?: string; relativePath?: string; fileName?: string; error?: string }> =>
     ipcRenderer.invoke('fs:save-image-to-project', projectRoot, fileName, base64Data),
+  watchWorkspace: (rootPaths: string[]): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('fs:watch-workspace', rootPaths),
+  onWorkspaceFsChange: (callback: (data: { changes: Array<{ eventType: string; fullPath: string; exists: boolean }> }) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, data: { changes: Array<{ eventType: string; fullPath: string; exists: boolean }> }): void =>
+      callback(data)
+    ipcRenderer.on('workspace:fs-change', listener)
+    return (): void => {
+      ipcRenderer.removeListener('workspace:fs-change', listener)
+    }
+  },
 
   // AI Copilot & Autonomous Agent API
   sendChatMessage: (payload: {

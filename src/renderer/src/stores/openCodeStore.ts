@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { useWorkspaceStore } from './workspaceStore'
+import { useSettingsStore } from './settingsStore'
 
 export interface OpenCodeToolCall {
   id: string
@@ -43,6 +44,14 @@ export interface OpenCodeMessage {
     description: string
     payload: any
   }
+  modifiedFiles?: Array<{
+    filePath: string
+    fileName: string
+    additions: number
+    deletions: number
+    originalContent?: string
+    newContent?: string
+  }>
 }
 
 export interface OpenCodeModelItem {
@@ -187,10 +196,6 @@ export const useOpenCodeStore = defineStore('openCodeStore', () => {
       if (data.requestId !== currentRequestId) return
       const targetMsg = messages.value.find((m) => m.id === currentRequestId)
       if (targetMsg) {
-        // Otomatis menutup box penalaran saat token respon/jawaban utama mulai ditulis
-        if (targetMsg.thinking && targetMsg.isThinkingExpanded && !targetMsg.userToggledThinking) {
-          targetMsg.isThinkingExpanded = false
-        }
         targetMsg.content += data.deltaContent
         targetMsg.activeStatusText = 'Menulis respons...'
         syncCurrentSessionToHistory()
@@ -264,6 +269,8 @@ export const useOpenCodeStore = defineStore('openCodeStore', () => {
         }
         syncCurrentSessionToHistory()
       }
+      const workspaceStore = useWorkspaceStore()
+      workspaceStore.refreshFileTree().catch?.(() => {})
     })
 
     // Stream Done
@@ -273,10 +280,6 @@ export const useOpenCodeStore = defineStore('openCodeStore', () => {
       if (targetMsg) {
         targetMsg.isStreaming = false
         targetMsg.activeStatusText = undefined
-        // Otomatis menutup penalaran setelah proses selesai
-        if (!targetMsg.userToggledThinking) {
-          targetMsg.isThinkingExpanded = false
-        }
         if (data.fullContent && !targetMsg.content.trim()) {
           targetMsg.content = data.fullContent
         }
@@ -320,8 +323,61 @@ export const useOpenCodeStore = defineStore('openCodeStore', () => {
       }
       if (timerInterval) clearInterval(timerInterval)
       isExecuting.value = false
+      const workspaceStore = useWorkspaceStore()
+      workspaceStore.refreshFileTree().catch?.(() => {})
+      workspaceStore.reloadAllOpenTabsFromDisk().catch?.(() => {})
       syncCurrentSessionToHistory()
     })
+
+    // File Modified Notification
+    if (window.makaryaAPI?.onAgentFileModified) {
+      window.makaryaAPI.onAgentFileModified((data) => {
+        const targetMsg =
+          (currentRequestId ? messages.value.find((m) => m.id === currentRequestId) : null) ||
+          [...messages.value].reverse().find((m) => m.role === 'assistant')
+
+        if (targetMsg) {
+          if (!targetMsg.modifiedFiles) targetMsg.modifiedFiles = []
+          const normPath = data.filePath.replace(/\\/g, '/').toLowerCase()
+          const existingIdx = targetMsg.modifiedFiles.findIndex(
+            (f) => f.filePath.replace(/\\/g, '/').toLowerCase() === normPath
+          )
+          if (existingIdx >= 0) {
+            targetMsg.modifiedFiles[existingIdx].additions += data.additions
+            targetMsg.modifiedFiles[existingIdx].deletions += data.deletions
+            if (data.newContent !== undefined) targetMsg.modifiedFiles[existingIdx].newContent = data.newContent
+            if (data.originalContent !== undefined && !targetMsg.modifiedFiles[existingIdx].originalContent) {
+              targetMsg.modifiedFiles[existingIdx].originalContent = data.originalContent
+            }
+          } else {
+            targetMsg.modifiedFiles.push({
+              filePath: data.filePath,
+              fileName: data.fileName,
+              additions: data.additions,
+              deletions: data.deletions,
+              originalContent: data.originalContent,
+              newContent: data.newContent
+            })
+          }
+          syncCurrentSessionToHistory()
+        }
+
+        const workspaceStore = useWorkspaceStore()
+        const settingsStore = useSettingsStore()
+        const isAutoApply = settingsStore.ai.reviewPolicy === 'auto_apply'
+
+        if (data.originalContent !== undefined && data.newContent !== undefined) {
+          if (isAutoApply) {
+            workspaceStore.clearPendingDiff(data.filePath)
+            workspaceStore.openFile(data.filePath, data.fileName)
+          } else {
+            workspaceStore.setPendingDiff(data.filePath, data.originalContent, data.newContent)
+            workspaceStore.openFile(data.filePath, data.fileName)
+          }
+        }
+        workspaceStore.refreshFileTree().catch?.(() => {})
+      })
+    }
 
     // Stream Error
     window.makaryaAPI.onAgentStreamError((data: { requestId: string; errorMessage: string }) => {
@@ -781,6 +837,7 @@ export const useOpenCodeStore = defineStore('openCodeStore', () => {
     addMessage,
     clearMessages,
     toggleThinking,
-    approveAction
+    approveAction,
+    initListeners
   }
 })

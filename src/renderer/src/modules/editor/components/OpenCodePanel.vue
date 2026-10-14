@@ -59,6 +59,9 @@ const selectedChoiceMap = ref<Record<string, string>>({})
 const expandedTools = ref<Record<string, boolean>>({})
 
 function onMakaryaTagToAgent(e: Event) {
+  if (!workspaceStore.isOpenCodePanelOpen && (workspaceStore.isClaudePanelOpen || workspaceStore.isCopilotPanelOpen || workspaceStore.isAntigravityPanelOpen)) {
+    return
+  }
   const customEvent = e as CustomEvent<TaggedContextItem>
   if (!customEvent.detail) return
 
@@ -266,6 +269,7 @@ async function processDroppedImage(file: File) {
 }
 
 onMounted(() => {
+  openCodeStore.initListeners()
   openCodeStore.loadAvailableModels()
   openCodeStore.loadSessions()
   window.addEventListener('makarya:tag-to-agent', onMakaryaTagToAgent)
@@ -1024,9 +1028,9 @@ async function handleSelectDetectedOption(msgId: string, opt: DetectedOption) {
             <!-- Expanded Body (Full Content Display) -->
             <div
               v-if="msg.isThinkingExpanded"
-              class="p-2.5 border-t border-white/[0.06] bg-black/50 text-[10.5px] text-slate-300 leading-relaxed"
+              class="p-2.5 border-t border-white/[0.06] bg-black/50 text-[10.5px] text-slate-300 leading-relaxed font-mono"
             >
-              <div class="pl-2.5 border-l-2 border-zinc-400/50 font-sans whitespace-pre-wrap break-words text-slate-200 selection:bg-white/20">
+              <div class="pl-2.5 border-l-2 border-zinc-400/50 whitespace-pre-wrap break-words text-slate-200 selection:bg-white/20">
                 {{ msg.thinking }}
                 <!-- Live thinking loading spinner -->
                 <UIcon
@@ -1040,7 +1044,7 @@ async function handleSelectDetectedOption(msgId: string, opt: DetectedOption) {
 
           <!-- State B: Live Streaming but Thinking Token hasn't arrived yet and content is empty -->
           <div
-            v-else-if="msg.isStreaming && !msg.content && (!msg.tools || msg.tools.length === 0)"
+            v-else-if="msg.isStreaming && !msg.content"
             class="mb-2.5 p-2 rounded-xl bg-[#0b0d11] border border-white/[0.16] ring-1 ring-white/[0.06] flex items-center justify-between shadow-xs animate-pulse"
           >
             <div class="flex items-center gap-2 min-w-0">
@@ -1048,7 +1052,7 @@ async function handleSelectDetectedOption(msgId: string, opt: DetectedOption) {
                 <UIcon name="i-lucide-brain" class="size-3.5 animate-pulse text-zinc-200" />
               </div>
               <span class="text-[10.5px] font-medium text-zinc-200 truncate">
-                Sedang menganalisis logika & kode...
+                {{ msg.activeStatusText || 'Sedang menganalisis logika & kode...' }}
               </span>
             </div>
             <div class="flex items-center gap-1 pr-1">
@@ -1116,66 +1120,6 @@ async function handleSelectDetectedOption(msgId: string, opt: DetectedOption) {
             <div v-else class="text-[9.5px] text-zinc-300 font-medium flex items-center gap-1 pt-1 border-t border-white/10">
               <UIcon name="i-lucide-check-circle" class="size-3 text-zinc-300" />
               <span>Pilihan: <strong>{{ msg.pendingQuestion.selectedOption }}</strong></span>
-            </div>
-          </div>
-
-          <!-- 3. Tool Calls Visual Cards (Compact Accordion Rows) -->
-          <div v-if="getVisibleTools(msg.tools).length > 0" class="space-y-1 mb-2">
-            <div
-              v-for="tool in getVisibleTools(msg.tools)"
-              :key="tool.id"
-              class="rounded-lg bg-black/40 border border-white/10 overflow-hidden text-[10px]"
-            >
-              <!-- Slim Accordion Header -->
-              <div
-                @click="toggleToolExpand(tool.id, tool.status)"
-                class="px-2 py-1 flex items-center justify-between text-zinc-300 font-mono cursor-pointer hover:bg-white/5 transition-colors"
-              >
-                <div class="flex items-center gap-1.5 truncate max-w-[200px]">
-                  <UIcon
-                    name="i-lucide-wrench"
-                    class="size-3 text-zinc-400 flex-shrink-0"
-                    :class="{ 'animate-spin': tool.status === 'running' }"
-                  />
-                  <span class="font-semibold text-zinc-200">{{ tool.name }}</span>
-                  <span v-if="getToolSummaryArg(tool)" class="text-[9px] text-slate-400 truncate opacity-80">
-                    {{ getToolSummaryArg(tool) }}
-                  </span>
-                </div>
-                <div class="flex items-center gap-1 flex-shrink-0">
-                  <span :class="[
-                    'px-1.5 py-0.2 rounded text-[8.5px] font-semibold',
-                    tool.status === 'completed'
-                      ? 'bg-white/10 text-zinc-300'
-                      : tool.status === 'running'
-                      ? 'bg-amber-500/20 text-amber-300 animate-pulse'
-                      : 'bg-rose-500/20 text-rose-300'
-                  ]">
-                    {{ tool.status === 'running' ? 'Memproses...' : `${tool.durationMs || 1}ms` }}
-                  </span>
-                  <UIcon
-                    :name="isToolExpanded(tool) ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'"
-                    class="size-3 text-slate-500"
-                  />
-                </div>
-              </div>
-
-              <!-- Output Body (Collapsible: Open while running, auto-collapsed when done) -->
-              <div
-                v-if="isToolExpanded(tool)"
-                class="p-1.5 border-t border-white/10 bg-black/70 text-[9.5px] text-slate-300 font-mono whitespace-pre-wrap overflow-hidden"
-              >
-                <div v-if="tool.status === 'running'" class="flex items-center gap-1.5 text-amber-400/90 py-0.5 animate-pulse">
-                  <UIcon name="i-lucide-loader-2" class="size-3 animate-spin text-amber-400" />
-                  <span>Sedang mengeksekusi sub-proses...</span>
-                </div>
-                <div v-else-if="tool.output">
-                  {{ tool.output }}
-                </div>
-                <div v-else class="text-slate-500 italic">
-                  (Tidak ada output teks dari sub-proses)
-                </div>
-              </div>
             </div>
           </div>
 
@@ -1341,6 +1285,25 @@ async function handleSelectDetectedOption(msgId: string, opt: DetectedOption) {
                 Tolak
               </button>
             </div>
+          </div>
+
+          <!-- Modified Files Badges (Makarya Agent Style) -->
+          <div
+            v-if="msg.modifiedFiles && msg.modifiedFiles.length > 0"
+            class="mt-2.5 pt-2 border-t border-white/[0.08] flex flex-wrap gap-1.5"
+          >
+            <button
+              v-for="file in msg.modifiedFiles"
+              :key="file.filePath"
+              @click="workspaceStore.openFile(file.filePath, file.fileName)"
+              class="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-black/40 hover:bg-white/10 border border-white/[0.08] hover:border-white/20 text-[10px] font-mono text-slate-300 hover:text-white transition-all cursor-pointer group"
+              :title="`Buka ${file.fileName} di editor`"
+            >
+              <UIcon name="i-lucide-file-code" class="size-3 text-emerald-400 group-hover:scale-110 transition-transform" />
+              <span class="truncate max-w-[140px] font-medium">{{ file.fileName }}</span>
+              <span v-if="file.additions > 0" class="text-emerald-400 font-bold text-[9px]">+{{ file.additions }}</span>
+              <span v-if="file.deletions > 0" class="text-rose-400 font-bold text-[9px]">-{{ file.deletions }}</span>
+            </button>
           </div>
         </div>
 

@@ -152,6 +152,19 @@ async function handleGlobalKeyboard(event: KeyboardEvent): Promise<void> {
         }
       }
     }
+  } else if (isModifier && !event.shiftKey && event.key.toLowerCase() === 'l') {
+    // Global Ctrl+L to tag selected code into active Agent / Claude chat
+    const activeEl = document.activeElement as HTMLElement | null
+    if (!activeEl?.closest('.monaco-editor')) {
+      const activeEditor = workspaceStore.getActiveEditorInstance()
+      if (activeEditor) {
+        event.preventDefault()
+        const tagAction = activeEditor.getAction('makarya.tagCodeToAgent')
+        if (tagAction) {
+          tagAction.run()
+        }
+      }
+    }
   }
 }
 

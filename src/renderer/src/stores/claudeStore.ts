@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { useWorkspaceStore } from './workspaceStore'
+import { useSettingsStore } from './settingsStore'
 
 export interface ClaudeToolCall {
   id: string
@@ -42,6 +43,14 @@ export interface ClaudeMessage {
     description: string
     payload: any
   }
+  modifiedFiles?: Array<{
+    filePath: string
+    fileName: string
+    additions: number
+    deletions: number
+    originalContent?: string
+    newContent?: string
+  }>
 }
 
 export interface ClaudeModelItem {
@@ -238,12 +247,19 @@ export const useClaudeStore = defineStore('claudeStore', () => {
       const targetMsg = messages.value.find((m) => m.id === currentRequestId)
       if (targetMsg) {
         if (!targetMsg.tools) targetMsg.tools = []
-        targetMsg.tools.push({
-          id: data.toolCallId || 't-' + Date.now(),
-          name: data.toolName,
-          args: data.args || {},
-          status: 'running'
-        })
+        const existing = targetMsg.tools.find((item) => data.toolCallId && item.id === data.toolCallId)
+        if (existing) {
+          existing.name = data.toolName || existing.name
+          existing.args = { ...existing.args, ...(data.args || {}) }
+          existing.status = 'running'
+        } else {
+          targetMsg.tools.push({
+            id: data.toolCallId || 't-' + Date.now(),
+            name: data.toolName,
+            args: data.args || {},
+            status: 'running'
+          })
+        }
         targetMsg.activeStatusText = `Menjalankan tool: ${data.toolName}...`
         syncCurrentSessionToHistory()
       }
@@ -268,7 +284,58 @@ export const useClaudeStore = defineStore('claudeStore', () => {
         }
         syncCurrentSessionToHistory()
       }
+      const workspaceStore = useWorkspaceStore()
+      workspaceStore.refreshFileTree().catch?.(() => {})
     })
+
+    // File Modified Notification (Claude Agent edits/writes file)
+    if (window.makaryaAPI.onAgentFileModified) {
+      window.makaryaAPI.onAgentFileModified((data) => {
+        if (currentRequestId) {
+          const targetMsg = messages.value.find((m) => m.id === currentRequestId)
+          if (targetMsg) {
+            if (!targetMsg.modifiedFiles) targetMsg.modifiedFiles = []
+            const normPath = data.filePath.replace(/\\/g, '/').toLowerCase()
+            const existingIdx = targetMsg.modifiedFiles.findIndex(
+              (f) => f.filePath.replace(/\\/g, '/').toLowerCase() === normPath
+            )
+            if (existingIdx >= 0) {
+              targetMsg.modifiedFiles[existingIdx].additions += data.additions
+              targetMsg.modifiedFiles[existingIdx].deletions += data.deletions
+              if (data.newContent !== undefined) targetMsg.modifiedFiles[existingIdx].newContent = data.newContent
+              if (data.originalContent !== undefined && !targetMsg.modifiedFiles[existingIdx].originalContent) {
+                targetMsg.modifiedFiles[existingIdx].originalContent = data.originalContent
+              }
+            } else {
+              targetMsg.modifiedFiles.push({
+                filePath: data.filePath,
+                fileName: data.fileName,
+                additions: data.additions,
+                deletions: data.deletions,
+                originalContent: data.originalContent,
+                newContent: data.newContent
+              })
+            }
+            syncCurrentSessionToHistory()
+          }
+        }
+
+        const workspaceStore = useWorkspaceStore()
+        const settingsStore = useSettingsStore()
+        const isAutoApply = settingsStore.ai.reviewPolicy === 'auto_apply'
+
+        if (data.originalContent !== undefined && data.newContent !== undefined) {
+          if (isAutoApply) {
+            workspaceStore.clearPendingDiff(data.filePath)
+            workspaceStore.openFile(data.filePath, data.fileName)
+          } else {
+            workspaceStore.setPendingDiff(data.filePath, data.originalContent, data.newContent)
+            workspaceStore.openFile(data.filePath, data.fileName)
+          }
+        }
+        workspaceStore.refreshFileTree().catch?.(() => {})
+      })
+    }
 
     // Stream Done
     window.makaryaAPI.onAgentStreamDone((data: { requestId: string; fullContent?: string }) => {
@@ -320,6 +387,9 @@ export const useClaudeStore = defineStore('claudeStore', () => {
       }
       if (timerInterval) clearInterval(timerInterval)
       isExecuting.value = false
+      const workspaceStore = useWorkspaceStore()
+      workspaceStore.refreshFileTree().catch?.(() => {})
+      workspaceStore.reloadAllOpenTabsFromDisk().catch?.(() => {})
       syncCurrentSessionToHistory()
     })
 
@@ -448,8 +518,26 @@ export const useClaudeStore = defineStore('claudeStore', () => {
     if (currentRequestId && window.makaryaAPI?.abortClaudeStream) {
       window.makaryaAPI.abortClaudeStream(currentRequestId)
     }
+    const targetMsg = messages.value.find((m) => m.id === currentRequestId)
+    if (targetMsg) {
+      targetMsg.isStreaming = false
+      targetMsg.activeStatusText = undefined
+      if (targetMsg.tools) {
+        for (const t of targetMsg.tools) {
+          if (t.status === 'running') {
+            t.status = 'failed'
+          }
+        }
+      }
+      if (!targetMsg.content.trim()) {
+        targetMsg.content = '*(Proses dihentikan oleh pengguna)*'
+      } else {
+        targetMsg.content += '\n\n*(Proses dihentikan oleh pengguna)*'
+      }
+    }
     if (timerInterval) clearInterval(timerInterval)
     isExecuting.value = false
+    syncCurrentSessionToHistory()
   }
 
   function addMessage(msg: Omit<ClaudeMessage, 'id' | 'timestamp'>): ClaudeMessage {

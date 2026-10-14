@@ -651,6 +651,16 @@ onMounted(() => {
     }
   })
 
+  // Global Search in Files (Ctrl+Shift+F)
+  editorInstance.addAction({
+    id: 'makarya.openGlobalSearch',
+    label: 'Find in Files (Global Search)',
+    keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF],
+    run: () => {
+      workspaceStore.openGlobalSearch()
+    }
+  })
+
   // Observe container size
   resizeObserver = new ResizeObserver(() => {
     editorInstance?.layout()

@@ -1,6 +1,6 @@
 import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
 import { join, basename, parse, relative, dirname, resolve } from 'node:path'
-import { existsSync } from 'node:fs'
+import { existsSync, watch, type FSWatcher } from 'node:fs'
 import { readdir, readFile, writeFile, stat, mkdir, rename, rm, cp } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
@@ -761,6 +761,99 @@ function registerIpcHandlers(): void {
       console.error('Error in fs:search-workspace-files:', err)
       return []
     }
+  })
+
+  // Active Workspace Filesystem Watchers
+  const activeWorkspaceWatchers = new Map<string, FSWatcher>()
+  let fsChangeDebounceTimer: NodeJS.Timeout | null = null
+  const pendingFsChanges = new Map<string, { eventType: string; fullPath: string; exists: boolean }>()
+
+  function isIgnoredFsPath(relPath: string): boolean {
+    const norm = relPath.replace(/\\/g, '/')
+    const parts = norm.split('/')
+    for (const part of parts) {
+      if (
+        part === '.git' ||
+        part === 'node_modules' ||
+        part === 'vendor' ||
+        part === '.makarya' ||
+        part === '.vscode' ||
+        part === '.idea' ||
+        part === 'dist' ||
+        part === 'out' ||
+        part === '.cache' ||
+        part === '.next' ||
+        part === '.nuxt' ||
+        part === '.output' ||
+        part === 'coverage' ||
+        part === 'tmp' ||
+        part === 'temp'
+      ) {
+        return true
+      }
+      if (part.endsWith('~') || part.endsWith('.tmp') || part.endsWith('.swp') || part === '4913') {
+        return true
+      }
+    }
+    return false
+  }
+
+  function flushFsChanges() {
+    if (pendingFsChanges.size === 0) return
+    const changes = Array.from(pendingFsChanges.values())
+    pendingFsChanges.clear()
+
+    for (const win of activeBrowserWindows) {
+      if (!win.isDestroyed()) {
+        win.webContents.send('workspace:fs-change', { changes })
+      }
+    }
+  }
+
+  function setupWorkspaceWatchers(rootPaths: string[]) {
+    // Close removed watchers
+    for (const [watchedPath, watcher] of activeWorkspaceWatchers.entries()) {
+      if (!rootPaths.includes(watchedPath)) {
+        try { watcher.close() } catch {}
+        activeWorkspaceWatchers.delete(watchedPath)
+      }
+    }
+
+    // Add new watchers
+    for (const rootPath of rootPaths) {
+      if (!rootPath || !existsSync(rootPath) || activeWorkspaceWatchers.has(rootPath)) continue
+      try {
+        const watcher = watch(rootPath, { recursive: true }, (eventType, filename) => {
+          if (!filename) return
+          const relPath = filename.toString()
+          if (isIgnoredFsPath(relPath)) return
+
+          const fullPath = join(rootPath, relPath)
+          const exists = existsSync(fullPath)
+          pendingFsChanges.set(fullPath.toLowerCase(), {
+            eventType,
+            fullPath,
+            exists
+          })
+
+          if (fsChangeDebounceTimer) clearTimeout(fsChangeDebounceTimer)
+          fsChangeDebounceTimer = setTimeout(flushFsChanges, 150)
+        })
+
+        watcher.on('error', (err) => {
+          console.warn(`[FsWatcher] Error watching ${rootPath}:`, err)
+        })
+
+        activeWorkspaceWatchers.set(rootPath, watcher)
+      } catch (err) {
+        console.warn(`[FsWatcher] Could not start watcher for ${rootPath}:`, err)
+      }
+    }
+  }
+
+  ipcMain.handle('fs:watch-workspace', async (_event, rootPaths: string[]) => {
+    setupWorkspaceWatchers(rootPaths || [])
+    return { success: true }
   })
 
   // Shell Command Execution with streaming to renderer

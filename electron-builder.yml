@@ -25,6 +25,9 @@ afterAllArtifactBuild: scripts/rename-artifacts.js
 win:
   icon: build/icon.ico
   artifactName: "Makarya.IDE.v${version}.${ext}"
+  extraResources:
+    - from: "node_modules/@vscode/ripgrep-win32-x64/bin/rg.exe"
+      to: "bin/rg.exe"
   target:
     - target: nsis
       arch:

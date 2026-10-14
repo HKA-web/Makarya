@@ -41,36 +41,118 @@ export interface FindInFilesResult {
   truncated: boolean
 }
 
+import { app } from 'electron'
+import { existsSync, readdirSync } from 'fs'
+
+let cachedRipgrepBinaryPath: string | null = null
+
+function findBinaryInDirectory(dir: string, binaryName: string, maxDepth = 6): string | null {
+  if (maxDepth <= 0 || !existsSync(dir)) return null
+  try {
+    const entries = readdirSync(dir, { withFileTypes: true })
+    for (const entry of entries) {
+      const fullPath = join(dir, entry.name)
+      if (entry.isFile() && entry.name.toLowerCase() === binaryName.toLowerCase()) {
+        return fullPath
+      }
+      if (entry.isDirectory()) {
+        const found = findBinaryInDirectory(fullPath, binaryName, maxDepth - 1)
+        if (found) return found
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null
+}
+
 /**
  * Resolve native ripgrep binary without triggering CommonJS/ESM module conflicts.
  * Supports both development and production packaged (app.asar.unpacked) modes.
  */
 export function getRipgrepBinaryPath(): string | null {
+  if (cachedRipgrepBinaryPath && existsSync(cachedRipgrepBinaryPath)) {
+    return cachedRipgrepBinaryPath
+  }
+
   const binaryName = process.platform === 'win32' ? 'rg.exe' : 'rg'
   const platformPkg = `ripgrep-${process.platform}-${process.arch}`
   const resourcesPath = (process as any).resourcesPath || ''
 
-  const candidatePaths = [
-    // 1. Production packaged resources unpacked paths
-    join(resourcesPath, 'app.asar.unpacked', 'node_modules', '@vscode', platformPkg, 'bin', binaryName),
-    join(resourcesPath, 'app.asar.unpacked', 'node_modules', '@vscode', 'ripgrep', 'bin', binaryName),
-    join(resourcesPath, 'app.asar.unpacked', 'node_modules', platformPkg, 'bin', binaryName),
-    join(resourcesPath, 'bin', binaryName),
+  const baseDirs: string[] = []
 
-    // 2. Dev mode relative to cwd
-    join(process.cwd(), 'node_modules', '@vscode', platformPkg, 'bin', binaryName),
-    join(process.cwd(), 'node_modules', '@vscode', 'ripgrep', 'bin', binaryName),
-    join(process.cwd(), 'node_modules', platformPkg, 'bin', binaryName),
+  // 1. Electron resourcesPath
+  if (resourcesPath) {
+    baseDirs.push(resourcesPath)
+  }
 
-    // 3. Dev mode relative to __dirname
-    join(__dirname, '..', '..', 'node_modules', '@vscode', platformPkg, 'bin', binaryName),
-    join(__dirname, '..', '..', 'node_modules', '@vscode', 'ripgrep', 'bin', binaryName),
-    join(__dirname, '..', '..', 'node_modules', platformPkg, 'bin', binaryName)
-  ]
+  // 2. Electron app.getAppPath()
+  try {
+    if (app && typeof app.getAppPath === 'function') {
+      const appPath = app.getAppPath()
+      baseDirs.push(join(appPath, '..'))
+      baseDirs.push(appPath)
+    }
+  } catch {
+    // ignore
+  }
+
+  // 3. process.cwd()
+  baseDirs.push(process.cwd())
+
+  // 4. __dirname (relative to current file: out/main or dist)
+  baseDirs.push(resolve(__dirname, '..', '..'))
+  baseDirs.push(__dirname)
+
+  const candidatePaths: string[] = []
+
+  for (const base of baseDirs) {
+    if (!base) continue
+
+    // A. Packaged unpacked nested structures (production electron-builder)
+    candidatePaths.push(
+      join(base, 'app.asar.unpacked', 'node_modules', '@vscode', 'ripgrep', 'node_modules', '@vscode', platformPkg, 'bin', binaryName),
+      join(base, 'app.asar.unpacked', 'node_modules', '@vscode', 'ripgrep', 'node_modules', platformPkg, 'bin', binaryName),
+      join(base, 'app.asar.unpacked', 'node_modules', '@vscode', platformPkg, 'bin', binaryName),
+      join(base, 'app.asar.unpacked', 'node_modules', '@vscode', 'ripgrep', 'bin', binaryName),
+      join(base, 'app.asar.unpacked', 'node_modules', platformPkg, 'bin', binaryName),
+      join(base, 'app.asar.unpacked', 'bin', binaryName)
+    )
+
+    // B. Direct node_modules structures (dev or unbundled)
+    candidatePaths.push(
+      join(base, 'node_modules', '@vscode', 'ripgrep', 'node_modules', '@vscode', platformPkg, 'bin', binaryName),
+      join(base, 'node_modules', '@vscode', 'ripgrep', 'node_modules', platformPkg, 'bin', binaryName),
+      join(base, 'node_modules', '@vscode', platformPkg, 'bin', binaryName),
+      join(base, 'node_modules', '@vscode', 'ripgrep', 'bin', binaryName),
+      join(base, 'node_modules', platformPkg, 'bin', binaryName)
+    )
+
+    // C. Bin folder directly in resources or base
+    candidatePaths.push(
+      join(base, 'bin', binaryName),
+      join(base, binaryName)
+    )
+  }
 
   for (const candidate of candidatePaths) {
     if (candidate && existsSync(candidate)) {
+      cachedRipgrepBinaryPath = candidate
+      console.log(`[SearchService] Ripgrep binary located at: ${candidate}`)
       return candidate
+    }
+  }
+
+  // Fallback: search recursively inside app.asar.unpacked
+  for (const base of baseDirs) {
+    const unpackedDir = join(base, 'app.asar.unpacked')
+    if (existsSync(unpackedDir)) {
+      const found = findBinaryInDirectory(unpackedDir, binaryName, 6)
+      if (found) {
+        cachedRipgrepBinaryPath = found
+        console.log(`[SearchService] Ripgrep binary located via scan at: ${found}`)
+        return found
+      }
     }
   }
 
@@ -79,10 +161,12 @@ export function getRipgrepBinaryPath(): string | null {
     if (resolved.includes('app.asar') && !resolved.includes('app.asar.unpacked')) {
       const unpacked = resolved.replace('app.asar', 'app.asar.unpacked')
       if (existsSync(unpacked)) {
+        cachedRipgrepBinaryPath = unpacked
         return unpacked
       }
     }
     if (existsSync(resolved)) {
+      cachedRipgrepBinaryPath = resolved
       return resolved
     }
   } catch {
@@ -94,16 +178,19 @@ export function getRipgrepBinaryPath(): string | null {
     if (resolvedGeneric.includes('app.asar') && !resolvedGeneric.includes('app.asar.unpacked')) {
       const unpacked = resolvedGeneric.replace('app.asar', 'app.asar.unpacked')
       if (existsSync(unpacked)) {
+        cachedRipgrepBinaryPath = unpacked
         return unpacked
       }
     }
     if (existsSync(resolvedGeneric)) {
+      cachedRipgrepBinaryPath = resolvedGeneric
       return resolvedGeneric
     }
   } catch {
     // ignore
   }
 
+  console.warn('[SearchService] Ripgrep binary not found in candidate paths')
   return null
 }
 
@@ -152,7 +239,9 @@ const DEFAULT_EXCLUDED_DIRS = new Set([
   'tmp',
   'temp',
   'uploads',
-  'upload'
+  'upload',
+  'storage',
+  'logs'
 ])
 
 const BINARY_EXTENSIONS = new Set([
@@ -198,6 +287,19 @@ const BINARY_EXTENSIONS = new Set([
 ])
 
 export class SearchService {
+  private activeChild: ChildProcess | null = null
+
+  public cancelActiveSearch(): void {
+    if (this.activeChild && !this.activeChild.killed) {
+      try {
+        this.activeChild.kill()
+      } catch {
+        // ignore
+      }
+      this.activeChild = null
+    }
+  }
+
   /**
    * Search for text matches across workspace files.
    * Uses native Ripgrep (Rust) for ultra-fast < 50ms searches, with Node.js fallback.
@@ -330,6 +432,9 @@ export class SearchService {
             // ignore
           }
         }
+        if (this.activeChild === child) {
+          this.activeChild = null
+        }
         resolveResult({
           results,
           totalMatches: collected,
@@ -341,8 +446,11 @@ export class SearchService {
         })
       }
 
+      this.cancelActiveSearch()
+
       try {
         child = spawn(rgBin, args, { windowsHide: true })
+        this.activeChild = child
 
         if (!child.stdout) {
           finish()
@@ -532,9 +640,9 @@ export class SearchService {
   ): Promise<void> {
     if (getStatus().hasMore) return
 
-    let entries: string[] = []
+    let entries: import('fs').Dirent[] = []
     try {
-      entries = await readdir(currentDir)
+      entries = await readdir(currentDir, { withFileTypes: true })
     } catch {
       return
     }
@@ -542,19 +650,15 @@ export class SearchService {
     for (const entry of entries) {
       if (getStatus().hasMore) return
 
-      if (DEFAULT_EXCLUDED_DIRS.has(entry) || entry.startsWith('.')) {
+      const name = entry.name
+      const lowerName = name.toLowerCase()
+      if (DEFAULT_EXCLUDED_DIRS.has(lowerName) || name.startsWith('.')) {
         continue
       }
 
-      const fullPath = join(currentDir, entry)
-      let fileStats
-      try {
-        fileStats = await stat(fullPath)
-      } catch {
-        continue
-      }
+      const fullPath = join(currentDir, name)
 
-      if (fileStats.isDirectory()) {
+      if (entry.isDirectory()) {
         await this.searchDirectory(
           fullPath,
           rootPath,
@@ -567,23 +671,24 @@ export class SearchService {
           offset,
           maxResults
         )
-      } else if (fileStats.isFile()) {
-        if (fileStats.size > 4 * 1024 * 1024) continue
-
-        const ext = entry.slice(entry.lastIndexOf('.')).toLowerCase()
+      } else if (entry.isFile()) {
+        const ext = name.slice(name.lastIndexOf('.')).toLowerCase()
         if (BINARY_EXTENSIONS.has(ext)) continue
 
         const relPath = relative(rootPath, fullPath).replace(/\\/g, '/')
 
-        if (includeRegex && !includeRegex.test(relPath) && !includeRegex.test(entry)) {
+        if (includeRegex && !includeRegex.test(relPath) && !includeRegex.test(name)) {
           continue
         }
 
-        if (excludeRegex && (excludeRegex.test(relPath) || excludeRegex.test(entry))) {
+        if (excludeRegex && (excludeRegex.test(relPath) || excludeRegex.test(name))) {
           continue
         }
 
         try {
+          const fileStats = await stat(fullPath)
+          if (fileStats.size > 4 * 1024 * 1024) continue
+
           const content = await readFile(fullPath, 'utf-8')
           if (content.includes('\0')) continue
 

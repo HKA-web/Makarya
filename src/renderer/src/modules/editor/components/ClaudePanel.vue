@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, nextTick, watch, computed } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick, watch, computed } from 'vue'
 import { useClaudeStore } from '@renderer/stores/claudeStore'
 import { useWorkspaceStore } from '@renderer/stores/workspaceStore'
 import { useSettingsStore } from '@renderer/stores/settingsStore'
@@ -20,6 +20,22 @@ const includeActiveFile = ref(false)
 const copiedIndex = ref<string | null>(null)
 const isModelModalOpen = ref(false)
 const isSessionModalOpen = ref(false)
+
+export interface TaggedContextItem {
+  id: string
+  path: string
+  name: string
+  startLine?: number
+  endLine?: number
+  lineRange?: string
+  selectedSnippet?: string
+  language?: string
+  isDirectory?: boolean
+}
+
+const taggedContexts = ref<TaggedContextItem[]>([])
+const isDraggingOver = ref(false)
+let dragCounter = 0
 
 const connectedProject = computed(() => {
   if (workspaceStore.activeRootPath) {
@@ -43,6 +59,11 @@ const expandedTools = ref<Record<string, boolean>>({})
 onMounted(() => {
   claudeStore.loadAvailableModels()
   claudeStore.loadSessions()
+  window.addEventListener('makarya:tag-to-agent', onMakaryaTagToAgent)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('makarya:tag-to-agent', onMakaryaTagToAgent)
 })
 
 function isToolExpanded(tool: any): boolean {
@@ -170,19 +191,262 @@ function removeAttachedImage(index: number): void {
   attachedImages.value.splice(index, 1)
 }
 
+function onMakaryaTagToAgent(e: Event) {
+  // If another agent panel is open and Claude panel is closed, skip
+  if (!workspaceStore.isClaudePanelOpen && (workspaceStore.isOpenCodePanelOpen || workspaceStore.isCopilotPanelOpen || workspaceStore.isAntigravityPanelOpen)) {
+    return
+  }
+
+  const customEvent = e as CustomEvent<any>
+  const detail = customEvent.detail
+  if (!detail || !detail.path) return
+
+  let lineLabel = ''
+  if (detail.lineRange) {
+    lineLabel = detail.lineRange.startsWith('L') ? detail.lineRange : `L${detail.lineRange}`
+  } else if (detail.startLine && detail.endLine && detail.startLine !== detail.endLine) {
+    lineLabel = `L${detail.startLine}-L${detail.endLine}`
+  } else if (detail.startLine) {
+    lineLabel = `L${detail.startLine}`
+  }
+
+  const tagId = `${detail.path}-${lineLabel || detail.startLine || 'all'}`
+  const existingIdx = taggedContexts.value.findIndex((t) => t.id === tagId)
+
+  const newTag: TaggedContextItem = {
+    id: tagId,
+    path: detail.path,
+    name: detail.name || detail.path.split(/[/\\]/).filter(Boolean).pop() || 'Untitled',
+    startLine: detail.startLine,
+    endLine: detail.endLine,
+    lineRange: lineLabel,
+    selectedSnippet: detail.selectedSnippet,
+    language: detail.language,
+    isDirectory: detail.isDirectory
+  }
+
+  if (existingIdx !== -1) {
+    taggedContexts.value[existingIdx] = newTag
+  } else {
+    taggedContexts.value.push(newTag)
+  }
+
+  // Insert tag directly into the chat input (e.g. "tes 📄 ImplementationPlanCard.vue L10-L20")
+  const fileBadge = `📄 ${newTag.name}${newTag.lineRange ? ` ${newTag.lineRange}` : ''}`
+  if (!inputText.value.includes(fileBadge)) {
+    inputText.value = inputText.value.trim()
+      ? `${inputText.value.trim()} ${fileBadge} `
+      : `${fileBadge} `
+  }
+
+  adjustTextareaHeight()
+  nextTick(() => {
+    inputAreaRef.value?.focus()
+  })
+}
+
+function removeTaggedContext(id: string) {
+  const idx = taggedContexts.value.findIndex((t) => t.id === id)
+  if (idx !== -1) {
+    const item = taggedContexts.value[idx]
+    if (item) {
+      const fileBadge = `📄 ${item.name}${item.lineRange ? ` ${item.lineRange}` : ''}`
+      inputText.value = inputText.value.replace(fileBadge, '').replace(/\s+/g, ' ').trim()
+    }
+    taggedContexts.value.splice(idx, 1)
+  }
+}
+
+function addFileOrFolderTag(path: string, name?: string, isDirectory?: boolean) {
+  const fileName = name || path.split(/[/\\]/).filter(Boolean).pop() || path
+  const existingIdx = taggedContexts.value.findIndex((t) => t.path.toLowerCase() === path.toLowerCase())
+  if (existingIdx === -1) {
+    taggedContexts.value.push({
+      id: `${path}-${Date.now()}`,
+      path,
+      name: fileName,
+      isDirectory
+    })
+  }
+
+  const fileBadge = `📄 ${fileName}`
+  if (!inputText.value.includes(fileBadge)) {
+    inputText.value = inputText.value.trim()
+      ? `${inputText.value.trim()} ${fileBadge} `
+      : `${fileBadge} `
+  }
+  adjustTextareaHeight()
+  nextTick(() => {
+    inputAreaRef.value?.focus()
+  })
+}
+
+function handleDragEnter(e: DragEvent) {
+  e.preventDefault()
+  dragCounter++
+  if (e.dataTransfer) {
+    e.dataTransfer.dropEffect = 'copy'
+  }
+  isDraggingOver.value = true
+}
+
+function handleDragOver(e: DragEvent) {
+  e.preventDefault()
+  if (e.dataTransfer) {
+    e.dataTransfer.dropEffect = 'copy'
+  }
+  isDraggingOver.value = true
+}
+
+function handleDragLeave(e: DragEvent) {
+  e.preventDefault()
+  dragCounter--
+  if (dragCounter <= 0) {
+    dragCounter = 0
+    isDraggingOver.value = false
+  }
+}
+
+async function handleFileDrop(e: DragEvent) {
+  e.preventDefault()
+  e.stopPropagation()
+  dragCounter = 0
+  isDraggingOver.value = false
+
+  if (!e.dataTransfer) return
+
+  // 1. Check if dropped from Makarya internal FileTree / Tabs
+  const makaryaFileEntry = e.dataTransfer.getData('makarya/file-entry') || e.dataTransfer.getData('application/json')
+  if (makaryaFileEntry) {
+    try {
+      const parsed = JSON.parse(makaryaFileEntry)
+      if (parsed && parsed.path) {
+        addFileOrFolderTag(parsed.path, parsed.name, parsed.isDirectory)
+        return
+      }
+    } catch {
+      // Fallback
+    }
+  }
+
+  // 2. Check if dropped native OS files (from File Explorer / Desktop)
+  const files = e.dataTransfer.files
+  if (files && files.length > 0) {
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i]
+      if (file.type.startsWith('image/')) {
+        await processDroppedImage(file)
+      } else {
+        const filePath = (file as any).path || file.name
+        addFileOrFolderTag(filePath, file.name, false)
+      }
+    }
+    return
+  }
+
+  // 3. Fallback to URI list or text/plain
+  const uriList = e.dataTransfer.getData('text/uri-list')
+  const textData = uriList || e.dataTransfer.getData('text/plain') || e.dataTransfer.getData('text')
+  if (textData && textData.trim()) {
+    const lines = textData.trim().split(/[\r\n]+/)
+    for (const line of lines) {
+      const trimmed = line.replace(/^file:\/\/\/?/, '').replace(/%20/g, ' ').trim()
+      if (trimmed) {
+        const name = trimmed.split(/[/\\]/).filter(Boolean).pop() || trimmed
+        addFileOrFolderTag(trimmed, name, false)
+      }
+    }
+  }
+}
+
+async function processDroppedImage(file: File) {
+  if (!connectedProject.value) return
+  const projectRoot = connectedProject.value.path
+  isUploadingImage.value = true
+  const reader = new FileReader()
+  reader.onload = async (e) => {
+    const base64 = e.target?.result as string
+    if (base64 && window.makaryaAPI?.saveImageToProject) {
+      try {
+        const res = await window.makaryaAPI.saveImageToProject(projectRoot, file.name, base64)
+        if (res.success && res.relativePath && res.absolutePath) {
+          attachedImages.value.push({
+            name: res.fileName || file.name,
+            relativePath: res.relativePath,
+            absolutePath: res.absolutePath,
+            previewUrl: base64
+          })
+        }
+      } catch (err) {
+        console.warn('Gagal mengunggah gambar drop ke .makarya:', err)
+      } finally {
+        isUploadingImage.value = false
+      }
+    }
+  }
+  reader.readAsDataURL(file)
+}
+
+async function handleChatContainerClick(e: MouseEvent) {
+  const target = (e.target as HTMLElement).closest('[data-file-ref]') as HTMLElement | null
+  if (target) {
+    const fileRef = target.getAttribute('data-file-ref')
+    if (fileRef) {
+      const cleanFileName = fileRef.split(':')[0].replace(/^📄\s*/, '').trim()
+      const targetLineMatch = fileRef.match(/:L?(\d+)/) || fileRef.match(/\s+L?(\d+)/)
+      const targetLine = targetLineMatch ? parseInt(targetLineMatch[1], 10) : undefined
+
+      let foundPath = ''
+      if (cleanFileName.includes('/') || cleanFileName.includes('\\')) {
+        foundPath = cleanFileName
+      } else if (workspaceStore.workspaceRoots) {
+        const match =
+          workspaceStore.recentFiles.find((f) => f.name.toLowerCase() === cleanFileName.toLowerCase()) ||
+          workspaceStore.tabList.find((t) => t.title.toLowerCase() === cleanFileName.toLowerCase())
+        if (match && match.filePath) foundPath = match.filePath
+        else if (match && (match as any).path) foundPath = (match as any).path
+      }
+
+      if (foundPath) {
+        await workspaceStore.openFile(foundPath, cleanFileName, targetLine)
+      }
+    }
+  }
+}
+
 async function handleSendMessage() {
   const text = inputText.value.trim()
-  if ((!text && attachedImages.value.length === 0 && (!includeActiveFile.value || !workspaceStore.activeTab?.filePath)) || claudeStore.isExecuting) return
+  if (
+    (!text &&
+      attachedImages.value.length === 0 &&
+      taggedContexts.value.length === 0 &&
+      (!includeActiveFile.value || !workspaceStore.activeTab?.filePath)) ||
+    claudeStore.isExecuting
+  )
+    return
 
-  let displayPrompt = text || 'Harap periksa dan analisis berkas/gambar yang dilampirkan.'
+  let displayPrompt = text || 'Harap periksa dan analisis berkas/kode/gambar yang dilampirkan.'
   if (includeActiveFile.value && workspaceStore.activeTab?.title) {
     const fileBadge = `📄 ${workspaceStore.activeTab.title}`
     displayPrompt = text ? `${fileBadge} ${text}` : fileBadge
   }
 
-  let fullPrompt = text || 'Harap periksa dan analisis gambar yang dilampirkan.'
+  let fullPrompt = text || 'Harap periksa dan analisis berkas/kode/gambar yang dilampirkan.'
 
-  // 1. Sertakan perintah & path gambar yang diunggah ke .makarya
+  // 1. Sertakan Tagged Code Snippets & Files (dari Ctrl+L atau Drag & Drop)
+  if (taggedContexts.value.length > 0) {
+    const taggedInstructions = taggedContexts.value
+      .map((tag) => {
+        if (tag.selectedSnippet) {
+          return `[Potongan Kode Dilampirkan (Ctrl+L): ${tag.path} (${tag.lineRange || `Line ${tag.startLine}`})]\n\`\`\`${tag.language || ''}\n${tag.selectedSnippet}\n\`\`\``
+        }
+        return `[Berkas Dilampirkan: ${tag.path}]`
+      })
+      .join('\n\n')
+    fullPrompt = `${taggedInstructions}\n\n${fullPrompt}`
+  }
+
+  // 2. Sertakan perintah & path gambar yang diunggah ke .makarya
   if (attachedImages.value.length > 0) {
     const imageInstructions = attachedImages.value
       .map(
@@ -193,7 +457,7 @@ async function handleSendMessage() {
     fullPrompt = `${imageInstructions}\n\n${fullPrompt}`
   }
 
-  // 2. Sertakan Konteks File Aktif jika dicentang
+  // 3. Sertakan Konteks File Aktif jika dicentang
   if (includeActiveFile.value && workspaceStore.activeTab?.filePath) {
     const activeTab = workspaceStore.activeTab
     fullPrompt = `[Konteks Berkas Aktif: ${activeTab.filePath}]\n\`\`\`${activeTab.language || ''}\n${activeTab.content || ''}\n\`\`\`\n\nInstruksi Pengguna:\n${fullPrompt}`
@@ -201,6 +465,7 @@ async function handleSendMessage() {
 
   inputText.value = ''
   attachedImages.value = []
+  taggedContexts.value = []
   adjustTextareaHeight()
   scrollToBottom()
 
@@ -476,16 +741,38 @@ function getVisibleTools(tools?: any[]) {
 
 function getToolSummaryArg(tool: any): string {
   if (!tool.args) return ''
-  if (tool.args.filePath) return tool.args.filePath.split(/[\\/]/).pop() || tool.args.filePath
-  if (tool.args.dirPath) return tool.args.dirPath.split(/[\\/]/).pop() || tool.args.dirPath
-  if (tool.args.command) return tool.args.command.length > 30 ? tool.args.command.slice(0, 30) + '...' : tool.args.command
-  if (tool.args.query) return `"${tool.args.query}"`
+  const p = tool.args.file_path || tool.args.filePath || tool.args.path
+  if (p) return p.split(/[\\/]/).pop() || p
+  const d = tool.args.dir_path || tool.args.dirPath
+  if (d) return d.split(/[\\/]/).pop() || d
+  const c = tool.args.command || tool.args.cmd
+  if (c) return c.length > 30 ? c.slice(0, 30) + '...' : c
+  const q = tool.args.query || tool.args.pattern
+  if (q) return `"${q}"`
   return ''
 }
 </script>
 
 <template>
-  <aside class="w-88 h-full flex flex-col bg-[#0c0a08] rounded-2xl border border-white/[0.08] select-none flex-shrink-0 text-slate-100 font-sans relative overflow-hidden shadow-sm transition-all">
+  <aside
+    class="w-88 h-full flex flex-col bg-[#0c0a08] rounded-2xl border border-white/[0.08] select-none flex-shrink-0 text-slate-100 font-sans relative overflow-hidden shadow-sm transition-all"
+    @dragenter="handleDragEnter"
+    @dragover="handleDragOver"
+    @dragleave="handleDragLeave"
+    @drop="handleFileDrop"
+  >
+    <!-- Drag & Drop Visual Overlay -->
+    <div
+      v-if="isDraggingOver"
+      class="absolute inset-0 z-50 bg-[#1e130c]/90 border-2 border-dashed border-[#ea580c] rounded-2xl backdrop-blur-xs flex flex-col items-center justify-center pointer-events-none transition-all animate-pulse p-4 text-center"
+    >
+      <div class="size-12 rounded-xl bg-[#ea580c]/20 border border-[#ea580c]/40 flex items-center justify-center text-[#f97316] mb-2 shadow-lg">
+        <UIcon name="i-lucide-file-code" class="size-6 text-[#f97316]" />
+      </div>
+      <div class="text-[12px] font-semibold text-orange-200">Lepaskan berkas di sini</div>
+      <div class="text-[10px] text-orange-300/70">Lampirkan file / gambar ke Claude Agent</div>
+    </div>
+
     <!-- Header (Claude Warm Amber/Terracotta Accent) -->
     <div class="h-9 px-3 border-b border-white/[0.06] flex items-center justify-between text-[11px] font-semibold bg-[#120d0a]/95 backdrop-blur-md flex-shrink-0">
       <div class="flex items-center gap-1.5 flex-shrink-0">
@@ -596,7 +883,7 @@ function getToolSummaryArg(tool: any): string {
     </div>
 
     <!-- Messages Container (Scrollable Area) -->
-    <div v-else ref="messageContainer" class="flex-1 overflow-y-auto p-3 text-[11px] relative flex flex-col custom-scrollbar">
+    <div v-else ref="messageContainer" @click="handleChatContainerClick" class="flex-1 overflow-y-auto p-3 text-[11px] relative flex flex-col custom-scrollbar">
       <!-- DEFAULT HERO STATE (Shown when messages.length === 0) -->
       <div
         v-if="claudeStore.messages.length === 0"
@@ -695,7 +982,7 @@ function getToolSummaryArg(tool: any): string {
                 : 'bg-[#120c08]/95 text-slate-200 rounded-tl-xs border border-[#ea580c]/15 text-[11px]'
             ]"
           >
-            <!-- 1. Modern Chat-Style Thinking Process Component -->
+            <!-- 1. Modern Chat-Style Thinking Process Component (Direct Text Stream like OpenCode) -->
             <!-- State A: Thinking Content Present -->
             <div
               v-if="msg.thinking"
@@ -727,7 +1014,7 @@ function getToolSummaryArg(tool: any): string {
                     <span
                       class="font-medium truncate transition-colors text-orange-200/90 group-hover:text-orange-100"
                     >
-                      {{ msg.isStreaming ? 'Claude sedang menalar...' : 'Penalaran Claude' }}
+                      {{ msg.isStreaming ? 'Sedang menalar...' : 'Penalaran Claude' }}
                     </span>
                     <span
                       v-if="msg.thinkingSeconds !== undefined"
@@ -740,7 +1027,7 @@ function getToolSummaryArg(tool: any): string {
 
                 <div class="flex items-center gap-1.5 flex-shrink-0 text-orange-300/70 group-hover:text-orange-200">
                   <button
-                    v-if="msg.isThinkingExpanded"
+                    v-if="msg.isThinkingExpanded && msg.thinking"
                     @click.stop="copyThinkingText(msg.thinking, msg.id)"
                     class="p-1 rounded hover:bg-[#ea580c]/20 text-orange-300/80 hover:text-orange-100 transition-colors cursor-pointer"
                     title="Salin hasil penalaran"
@@ -777,7 +1064,7 @@ function getToolSummaryArg(tool: any): string {
 
             <!-- State B: Live Streaming but Thinking Token hasn't arrived yet and content is empty -->
             <div
-              v-else-if="msg.isStreaming && !msg.content && (!msg.tools || msg.tools.length === 0)"
+              v-else-if="msg.isStreaming && !msg.content"
               class="mb-2.5 p-2 rounded-xl bg-[#1a0f08]/80 border border-orange-500/20 ring-1 ring-orange-500/10 flex items-center justify-between shadow-xs animate-pulse"
             >
               <div class="flex items-center gap-2 min-w-0">
@@ -785,7 +1072,7 @@ function getToolSummaryArg(tool: any): string {
                   <UIcon name="i-lucide-brain" class="size-3.5 animate-pulse text-orange-400" />
                 </div>
                 <span class="text-[10.5px] font-medium text-orange-200 truncate">
-                  Claude sedang menganalisis logika & kode...
+                  {{ msg.activeStatusText || 'Claude sedang menganalisis logika & kode...' }}
                 </span>
               </div>
               <div class="flex items-center gap-1 pr-1">
@@ -795,7 +1082,7 @@ function getToolSummaryArg(tool: any): string {
               </div>
             </div>
 
-            <!-- 2. Interactive Question Card -->
+            <!-- 2. Interactive Question Card (Kept OUTSIDE so user can answer clearly) -->
             <div v-if="msg.pendingQuestion" class="mb-2 p-2.5 rounded-lg bg-[#1a0f08] border-l-2 border-l-orange-500 border border-orange-500/25 shadow-sm">
               <div class="flex items-center gap-1 text-[9px] text-orange-400 font-semibold uppercase tracking-wider mb-1">
                 <UIcon name="i-lucide-help-circle" class="size-3" />
@@ -853,66 +1140,6 @@ function getToolSummaryArg(tool: any): string {
               <div v-else class="text-[9.5px] text-orange-400 font-medium flex items-center gap-1 pt-1 border-t border-white/10">
                 <UIcon name="i-lucide-check-circle" class="size-3 text-orange-400" />
                 <span>Pilihan: <strong>{{ msg.pendingQuestion.selectedOption }}</strong></span>
-              </div>
-            </div>
-
-            <!-- 3. Tool Calls Visual Cards -->
-            <div v-if="getVisibleTools(msg.tools).length > 0" class="space-y-1 mb-2">
-              <div
-                v-for="tool in getVisibleTools(msg.tools)"
-                :key="tool.id"
-                class="rounded-lg bg-black/40 border border-[#ea580c]/20 overflow-hidden text-[10px]"
-              >
-                <!-- Slim Accordion Header -->
-                <div
-                  @click="toggleToolExpand(tool.id, tool.status)"
-                  class="px-2 py-1 flex items-center justify-between text-orange-300 font-mono cursor-pointer hover:bg-orange-500/5 transition-colors"
-                >
-                  <div class="flex items-center gap-1.5 truncate max-w-[200px]">
-                    <UIcon
-                      name="i-lucide-wrench"
-                      class="size-3 text-[#f97316] flex-shrink-0"
-                      :class="{ 'animate-spin': tool.status === 'running' }"
-                    />
-                    <span class="font-semibold text-orange-300">{{ tool.name }}</span>
-                    <span v-if="getToolSummaryArg(tool)" class="text-[9px] text-slate-400 truncate opacity-80">
-                      {{ getToolSummaryArg(tool) }}
-                    </span>
-                  </div>
-                  <div class="flex items-center gap-1 flex-shrink-0">
-                    <span :class="[
-                      'px-1.5 py-0.2 rounded text-[8.5px] font-semibold',
-                      tool.status === 'completed'
-                        ? 'bg-orange-500/15 text-orange-300'
-                        : tool.status === 'running'
-                        ? 'bg-amber-500/20 text-amber-300 animate-pulse'
-                        : 'bg-rose-500/20 text-rose-300'
-                    ]">
-                      {{ tool.status === 'running' ? 'Memproses...' : `${tool.durationMs || 1}ms` }}
-                    </span>
-                    <UIcon
-                      :name="isToolExpanded(tool) ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'"
-                      class="size-3 text-slate-500"
-                    />
-                  </div>
-                </div>
-
-                <!-- Output Body -->
-                <div
-                  v-if="isToolExpanded(tool)"
-                  class="p-1.5 border-t border-[#ea580c]/15 bg-black/70 text-[9.5px] text-slate-300 font-mono whitespace-pre-wrap max-h-32 overflow-y-auto custom-scrollbar"
-                >
-                  <div v-if="tool.status === 'running'" class="flex items-center gap-1.5 text-amber-400/90 py-0.5 animate-pulse">
-                    <UIcon name="i-lucide-loader-2" class="size-3 animate-spin text-amber-400" />
-                    <span>Sedang mengeksekusi sub-proses Claude...</span>
-                  </div>
-                  <div v-else-if="tool.output">
-                    {{ tool.output }}
-                  </div>
-                  <div v-else class="text-slate-500 italic">
-                    (Tidak ada output teks dari sub-proses)
-                  </div>
-                </div>
               </div>
             </div>
 
@@ -1081,6 +1308,25 @@ function getToolSummaryArg(tool: any): string {
                   Tolak
                 </button>
               </div>
+            </div>
+
+            <!-- Modified Files Badges (Makarya Agent Style) -->
+            <div
+              v-if="msg.modifiedFiles && msg.modifiedFiles.length > 0"
+              class="mt-2.5 pt-2 border-t border-white/[0.08] flex flex-wrap gap-1.5"
+            >
+              <button
+                v-for="file in msg.modifiedFiles"
+                :key="file.filePath"
+                @click="workspaceStore.openFile(file.filePath, file.fileName)"
+                class="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-black/40 hover:bg-[#ea580c]/20 border border-white/[0.08] hover:border-[#ea580c]/40 text-[10px] font-mono text-slate-300 hover:text-white transition-all cursor-pointer group"
+                :title="`Buka ${file.fileName} di editor`"
+              >
+                <UIcon name="i-lucide-file-code" class="size-3 text-[#f97316] group-hover:scale-110 transition-transform" />
+                <span class="truncate max-w-[140px] font-medium">{{ file.fileName }}</span>
+                <span v-if="file.additions > 0" class="text-emerald-400 font-bold text-[9px]">+{{ file.additions }}</span>
+                <span v-if="file.deletions > 0" class="text-rose-400 font-bold text-[9px]">-{{ file.deletions }}</span>
+              </button>
             </div>
           </div>
 
@@ -1272,7 +1518,7 @@ function getToolSummaryArg(tool: any): string {
             <!-- Circular Send / Abort Button -->
             <button
               v-if="claudeStore.isExecuting"
-              @click="claudeStore.abortCurrent"
+              @click="claudeStore.abortCurrent()"
               class="w-6 h-6 min-w-[24px] rounded-full flex items-center justify-center bg-rose-500 hover:bg-rose-600 text-white shadow-md active:scale-95 transition-all cursor-pointer"
               title="Hentikan Jawaban Claude (Stop)"
             >

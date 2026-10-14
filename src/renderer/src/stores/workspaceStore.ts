@@ -301,7 +301,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     bottomPanelHeight.value = Math.max(120, Math.min(height, window.innerHeight * 0.85))
   }
 
-  function toggleGlobalSearch(initialQuery?: string): void {
+  function openGlobalSearch(initialQuery?: string): void {
     if (initialQuery !== undefined) {
       globalSearchInitialQuery.value = initialQuery
     } else {
@@ -317,18 +317,34 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         }
       }
     }
-    isGlobalSearchVisible.value = !isGlobalSearchVisible.value
-  }
-
-  function openGlobalSearch(initialQuery?: string): void {
-    if (initialQuery !== undefined) {
-      globalSearchInitialQuery.value = initialQuery
-    }
     isGlobalSearchVisible.value = true
   }
 
   function closeGlobalSearch(): void {
     isGlobalSearchVisible.value = false
+    const activeEd = getActiveEditorInstance()
+    if (activeEd) {
+      nextTick(() => {
+        try {
+          activeEd.focus()
+        } catch {
+          // ignore
+        }
+      })
+    }
+  }
+
+  function toggleGlobalSearch(initialQuery?: string): void {
+    if (isGlobalSearchVisible.value) {
+      // Re-focus and select all in input if already visible
+      const inputEl = document.querySelector('input[placeholder*="Ctrl+Shift+F"]') as HTMLInputElement | null
+      if (inputEl) {
+        inputEl.focus()
+        inputEl.select()
+      }
+    } else {
+      openGlobalSearch(initialQuery)
+    }
   }
 
   function recordRecentFile(filePath: string, fileName: string): void {
@@ -679,6 +695,12 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         const pendingDiff = getPendingDiff(resolvedPath)
         if (pendingDiff) {
           existingTab.content = pendingDiff.newContent
+        } else if (!existingTab.isDirty && window.makaryaAPI) {
+          const readResult = await window.makaryaAPI.readFile(resolvedPath)
+          if (!readResult.error && readResult.content !== undefined) {
+            existingTab.content = readResult.content
+            existingTab.savedContent = readResult.content
+          }
         }
         if (targetLine && targetLine > 0) {
           setTimeout(() => {
@@ -939,6 +961,33 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 
   async function refreshFileTree(): Promise<void> {
     await refreshDirectory()
+  }
+
+  async function reloadOpenFileFromDisk(filePath: string): Promise<void> {
+    const norm = normalizePath(filePath)
+    const targetTab = tabList.value.find((tab) => tab.filePath && normalizePath(tab.filePath) === norm)
+    if (!targetTab || targetTab.isDirty || !window.makaryaAPI) return
+
+    try {
+      const readResult = await window.makaryaAPI.readFile(targetTab.filePath || filePath)
+      if (!readResult.error && readResult.content !== undefined) {
+        if (targetTab.content !== readResult.content) {
+          targetTab.content = readResult.content
+          targetTab.savedContent = readResult.content
+          targetTab.isDirty = false
+        }
+      }
+    } catch (err) {
+      console.warn('Gagal memuat ulang berkas dari disk:', filePath, err)
+    }
+  }
+
+  async function reloadAllOpenTabsFromDisk(): Promise<void> {
+    for (const tab of tabList.value) {
+      if (tab.filePath && !tab.isDirty) {
+        await reloadOpenFileFromDisk(tab.filePath)
+      }
+    }
   }
 
   async function createFile(parentDirectoryPath: string, fileName: string): Promise<{ success: boolean; message: string }> {
@@ -1261,6 +1310,44 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return activeMonacoEditorInstance
   }
 
+  // Real-time Workspace Filesystem Watcher synchronization
+  let fsChangeCleanup: (() => void) | null = null
+  let fsChangeDebounceTimer: any = null
+
+  function initFsWatcherListener(): void {
+    if (fsChangeCleanup || !window.makaryaAPI?.onWorkspaceFsChange) return
+    fsChangeCleanup = window.makaryaAPI.onWorkspaceFsChange((data) => {
+      if (fsChangeDebounceTimer) clearTimeout(fsChangeDebounceTimer)
+      fsChangeDebounceTimer = setTimeout(() => {
+        refreshFileTree().catch?.(() => {})
+      }, 120)
+
+      if (data?.changes && Array.isArray(data.changes)) {
+        for (const change of data.changes) {
+          const normChange = normalizePath(change.fullPath)
+          const matchedTab = tabList.value.find(
+            (t) => t.filePath && normalizePath(t.filePath) === normChange
+          )
+          if (matchedTab && change.exists && !matchedTab.isDirty) {
+            reloadOpenFileFromDisk(change.fullPath).catch?.(() => {})
+          }
+        }
+      }
+    })
+  }
+
+  // Auto-watch roots whenever workspaceRoots changes
+  watch(
+    () => workspaceRoots.value.map((r) => r.path),
+    (paths) => {
+      initFsWatcherListener()
+      if (window.makaryaAPI?.watchWorkspace) {
+        window.makaryaAPI.watchWorkspace(paths).catch?.(() => {})
+      }
+    },
+    { immediate: true, deep: true }
+  )
+
   return {
     workspaceRoots,
     activeRootPath,
@@ -1319,6 +1406,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     toggleFolderExpanded,
     refreshDirectory,
     refreshFileTree,
+    reloadOpenFileFromDisk,
+    reloadAllOpenTabsFromDisk,
     openFile,
     updateTabContent,
     saveActiveFile,

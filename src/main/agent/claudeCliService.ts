@@ -1,7 +1,7 @@
 import { BrowserWindow } from 'electron'
 import { spawn, exec, type ChildProcess } from 'child_process'
 import { existsSync, readFileSync, readdirSync, statSync, unlinkSync } from 'fs'
-import { join } from 'path'
+import { join, resolve, isAbsolute, basename } from 'path'
 import { homedir } from 'os'
 import { randomUUID } from 'node:crypto'
 import { VercelAiAgentService } from './vercelAiService'
@@ -65,6 +65,103 @@ function formatModelDisplayName(rawId: string): string {
     .split(/[-_]/)
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(' ')
+}
+
+function formatToolDisplayName(toolName: string): string {
+  const map: Record<string, string> = {
+    GlobTool: 'Glob',
+    glob_tool: 'Glob',
+    glob: 'Glob',
+    GrepTool: 'Grep',
+    grep_tool: 'Grep',
+    grep: 'Grep',
+    FileReadTool: 'Read',
+    file_read: 'Read',
+    read_file: 'Read',
+    View: 'Read',
+    FileEditTool: 'Edit',
+    file_edit: 'Edit',
+    edit_file: 'Edit',
+    Edit: 'Edit',
+    FileWriteTool: 'Write',
+    file_write: 'Write',
+    write_to_file: 'Write',
+    Write: 'Write',
+    BashTool: 'Bash',
+    bash: 'Bash',
+    run_command: 'Bash',
+    Execute: 'Bash',
+    LSTool: 'LS',
+    list_dir: 'LS',
+    DirectoryList: 'LS'
+  }
+  return map[toolName] || toolName.replace(/Tool$/, '')
+}
+
+function formatToolArgSummary(args: any): string {
+  if (!args || typeof args !== 'object') return ''
+  const pattern = args.pattern || args.glob || args.query || args.file_pattern
+  if (pattern) return `"${pattern}"`
+
+  const path = args.file_path || args.path || args.filePath || args.dir_path || args.dirPath
+  if (path) {
+    let cleanPath = typeof path === 'string' ? path.replace(/\\/g, '/') : String(path)
+    if (cleanPath.length > 45) {
+      const parts = cleanPath.split('/')
+      if (parts.length > 2) {
+        cleanPath = parts.slice(-2).join('/')
+      }
+    }
+    return `"${cleanPath}"`
+  }
+
+  const cmd = args.command || args.cmd
+  if (cmd) {
+    const trimmedCmd = typeof cmd === 'string' ? cmd.trim() : String(cmd)
+    const shortCmd = trimmedCmd.length > 45 ? trimmedCmd.slice(0, 42) + '...' : trimmedCmd
+    return `"${shortCmd}"`
+  }
+
+  const keys = Object.keys(args)
+  if (keys.length > 0 && typeof args[keys[0]] === 'string') {
+    const val = args[keys[0]].trim()
+    return `"${val.length > 35 ? val.slice(0, 32) + '...' : val}"`
+  }
+
+  return ''
+}
+
+function formatToolResultSummary(toolName: string, output: string, isError: boolean): string {
+  if (isError) return 'failed'
+  if (!output || !output.trim()) return 'done'
+
+  const trimmed = output.trim()
+  if (trimmed.toLowerCase().includes('no matches') || trimmed.toLowerCase().includes('0 matches')) {
+    return '0 matches'
+  }
+  const lines = trimmed.split('\n').filter((l) => l.trim().length > 0)
+  const normName = toolName.toLowerCase()
+
+  if (normName.includes('glob') || normName.includes('grep')) {
+    const count = lines.length
+    return `${count} match${count === 1 ? '' : 'es'}`
+  }
+  if (normName.includes('read') || normName.includes('view')) {
+    const count = lines.length
+    return `${count} line${count === 1 ? '' : 's'}`
+  }
+  if (normName.includes('edit') || normName.includes('write')) {
+    return 'ok'
+  }
+  if (normName.includes('bash') || normName.includes('exec') || normName.includes('command')) {
+    if (trimmed.toLowerCase().includes('error')) return 'error'
+    return 'done'
+  }
+
+  if (lines.length === 1 && lines[0].length <= 25) {
+    return lines[0]
+  }
+  return `${lines.length} lines`
 }
 
 export class ClaudeCliService {
@@ -271,7 +368,14 @@ export class ClaudeCliService {
     }
 
     const cwd = validProjectRoot || process.cwd()
-    const cliArgs: string[] = ['-p']
+    const cliArgs: string[] = [
+      '-p',
+      '--output-format',
+      'stream-json',
+      '--include-partial-messages',
+      '--verbose',
+      '--forward-subagent-text'
+    ]
 
     // Session handling: use native Claude CLI session persistence (--resume if ongoing, --session-id if new)
     const cleanSessionId = sessionId ? sessionId.replace(/^claude_/, '') : undefined
@@ -315,6 +419,7 @@ export class ClaudeCliService {
         cwd,
         shell: true,
         stdio: ['pipe', 'pipe', 'pipe'],
+        windowsHide: true,
         env: { ...process.env, FORCE_COLOR: '0' }
       })
 
@@ -328,28 +433,279 @@ export class ClaudeCliService {
         })
       }
 
-      // Immediately announce active mode & model into the live thinking stream (persis seperti OpenCode!)
+      // Immediately announce active mode & model into the live thinking stream
       const activeModeName = executionMode === 'chat' || executionMode === 'plan' ? 'plan' : 'agent'
       const activeModelName = model || 'Claude 3.7 Sonnet'
-      targetWindow.webContents.send('agent:thought-token', {
-        requestId,
-        deltaThought: `> ${activeModeName} · ${activeModelName}\n`
-      })
 
-      // Send prompt via stdin (just like OpenCode!)
+      let lastThoughtEndedWithNewline = true
+      const sendThought = (delta: string) => {
+        if (!delta) return
+        targetWindow.webContents.send('agent:thought-token', {
+          requestId,
+          deltaThought: delta
+        })
+        lastThoughtEndedWithNewline = delta.endsWith('\n')
+      }
+
+      sendThought(`> ${activeModeName} · ${activeModelName} · Claude Code Engine\n\n`)
+
+      // Send prompt via stdin immediately and close stdin to signal EOF
       proc.stdin?.write(lastUserMessage + '\n')
       proc.stdin?.end()
 
-      let hasReceivedStdout = false
+      let buffer = ''
+      let hasReceivedContent = false
+      const activeTools = new Map<string, { name: string; args: any; startTime: number; printedStart: boolean }>()
+      const toolOriginalContents = new Map<string, { fullPath: string; originalContent: string }>()
 
       proc.stdout?.on('data', (data) => {
-        hasReceivedStdout = true
-        const text = data.toString()
-        const cleanText = text.replace(/\u001b\[[0-9;]*[a-zA-Z]/g, '')
-        targetWindow.webContents.send('agent:stream-token', {
-          requestId,
-          deltaContent: cleanText
-        })
+        buffer += data.toString()
+        const lines = buffer.split(/\r?\n/)
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          const trimmed = line.trim()
+          if (!trimmed) continue
+
+          try {
+            const eventObj = JSON.parse(trimmed)
+
+            // 1. System events (init, status)
+            if (eventObj.type === 'system') {
+              if (eventObj.subtype === 'init' && eventObj.session_id) {
+                const assignedId = eventObj.session_id
+                if (cleanSessionId) {
+                  this.sessionMap.set(cleanSessionId, assignedId)
+                }
+                targetWindow.webContents.send('agent:session-linked', {
+                  clientSessionId: sessionId || assignedId,
+                  claudeSessionId: assignedId
+                })
+              }
+              continue
+            }
+
+            // 2. Stream events (content_block_start, content_block_delta, content_block_stop, etc.)
+            if (eventObj.type === 'stream_event' && eventObj.event) {
+              const ev = eventObj.event
+
+              // Tool start via stream event
+              if (ev.type === 'content_block_start' && ev.content_block) {
+                const cb = ev.content_block
+                if (cb.type === 'tool_use') {
+                  const toolCallId = cb.id || `call_${Date.now()}`
+                  const toolName = cb.name || 'tool'
+                  const toolArgs = cb.input || {}
+                  const hasArgs = Object.keys(toolArgs).length > 0
+                  const toolRecord = {
+                    name: toolName,
+                    args: toolArgs,
+                    startTime: Date.now(),
+                    printedStart: hasArgs
+                  }
+                  activeTools.set(toolCallId, toolRecord)
+
+                  // Track file before modification
+                  const isFileEditTool = /edit|write|create|modify|patch/i.test(toolName)
+                  const targetRawPath = toolArgs.file_path || toolArgs.filePath || toolArgs.path || toolArgs.targetFile
+                  if (isFileEditTool && targetRawPath && typeof targetRawPath === 'string') {
+                    const fullPath = isAbsolute(targetRawPath) ? targetRawPath : resolve(cwd, targetRawPath)
+                    let originalContent = ''
+                    try {
+                      if (existsSync(fullPath)) {
+                        originalContent = readFileSync(fullPath, 'utf8')
+                      }
+                    } catch {}
+                    toolOriginalContents.set(toolCallId, { fullPath, originalContent })
+                  }
+
+                  if (hasArgs) {
+                    const disp = formatToolDisplayName(toolName)
+                    const arg = formatToolArgSummary(toolArgs)
+                    const prefix = lastThoughtEndedWithNewline ? '' : '\n'
+                    sendThought(`${prefix}* ${disp}${arg ? ' ' + arg : ''} `)
+                  }
+
+                  targetWindow.webContents.send('agent:tool-start', {
+                    requestId,
+                    toolCallId,
+                    toolName,
+                    args: toolArgs
+                  })
+                }
+              }
+
+              // Text or thinking delta
+              if (ev.type === 'content_block_delta' && ev.delta) {
+                const delta = ev.delta
+                if (delta.type === 'text_delta' && delta.text) {
+                  hasReceivedContent = true
+                  targetWindow.webContents.send('agent:stream-token', {
+                    requestId,
+                    deltaContent: delta.text
+                  })
+                } else if (delta.type === 'thinking_delta' && delta.thinking) {
+                  sendThought(delta.thinking)
+                }
+              }
+              continue
+            }
+
+            // 3. Assistant message with complete blocks (tools, text, thinking)
+            if (eventObj.type === 'assistant' && eventObj.message) {
+              const msg = eventObj.message
+              if (Array.isArray(msg.content)) {
+                for (const item of msg.content) {
+                  if (item.type === 'tool_use') {
+                    const toolCallId = item.id || `call_${Date.now()}`
+                    const toolName = item.name || 'tool'
+                    const toolArgs = item.input || {}
+                    let t = activeTools.get(toolCallId)
+                    if (!t) {
+                      t = {
+                        name: toolName,
+                        args: toolArgs,
+                        startTime: Date.now(),
+                        printedStart: false
+                      }
+                      activeTools.set(toolCallId, t)
+                    } else {
+                      t.args = { ...t.args, ...toolArgs }
+                    }
+
+                    // Track file before modification if not already tracked
+                    if (!toolOriginalContents.has(toolCallId)) {
+                      const isFileEditTool = /edit|write|create|modify|patch/i.test(toolName)
+                      const targetRawPath = toolArgs.file_path || toolArgs.filePath || toolArgs.path || toolArgs.targetFile
+                      if (isFileEditTool && targetRawPath && typeof targetRawPath === 'string') {
+                        const fullPath = isAbsolute(targetRawPath) ? targetRawPath : resolve(cwd, targetRawPath)
+                        let originalContent = ''
+                        try {
+                          if (existsSync(fullPath)) {
+                            originalContent = readFileSync(fullPath, 'utf8')
+                          }
+                        } catch {}
+                        toolOriginalContents.set(toolCallId, { fullPath, originalContent })
+                      }
+                    }
+
+                    if (!t.printedStart) {
+                      t.printedStart = true
+                      const disp = formatToolDisplayName(t.name)
+                      const arg = formatToolArgSummary(t.args)
+                      const prefix = lastThoughtEndedWithNewline ? '' : '\n'
+                      sendThought(`${prefix}* ${disp}${arg ? ' ' + arg : ''} `)
+                    }
+
+                    targetWindow.webContents.send('agent:tool-start', {
+                      requestId,
+                      toolCallId,
+                      toolName,
+                      args: toolArgs
+                    })
+                  }
+                }
+              }
+              continue
+            }
+
+            // 4. User message containing tool results
+            if (eventObj.type === 'user' && eventObj.message) {
+              const msg = eventObj.message
+              if (Array.isArray(msg.content)) {
+                for (const item of msg.content) {
+                  if (item.type === 'tool_result' && item.tool_use_id) {
+                    const toolInfo = activeTools.get(item.tool_use_id)
+                    const durationMs = toolInfo ? Math.max(1, Date.now() - toolInfo.startTime) : 1
+                    const toolName = toolInfo?.name || 'tool'
+                    const output =
+                      typeof item.content === 'string'
+                        ? item.content
+                        : JSON.stringify(item.content || '', null, 2)
+                    const isError = Boolean(item.is_error)
+
+                    const resultSummary = formatToolResultSummary(toolName, output, isError)
+
+                    if (toolInfo && !toolInfo.printedStart) {
+                      toolInfo.printedStart = true
+                      const disp = formatToolDisplayName(toolName)
+                      const arg = formatToolArgSummary(toolInfo.args)
+                      const prefix = lastThoughtEndedWithNewline ? '' : '\n'
+                      sendThought(`${prefix}* ${disp}${arg ? ' ' + arg : ''} ${resultSummary}\n`)
+                    } else {
+                      sendThought(`${resultSummary}\n`)
+                    }
+
+                    targetWindow.webContents.send('agent:tool-finish', {
+                      requestId,
+                      toolCallId: item.tool_use_id,
+                      toolName,
+                      status: isError ? 'failed' : 'success',
+                      output,
+                      durationMs
+                    })
+
+                    // Emit agent:file-modified if file write/edit tool completed successfully
+                    const fileSnapshot = toolOriginalContents.get(item.tool_use_id)
+                    if (fileSnapshot && !isError) {
+                      toolOriginalContents.delete(item.tool_use_id)
+                      let newContent = ''
+                      try {
+                        if (existsSync(fileSnapshot.fullPath)) {
+                          newContent = readFileSync(fileSnapshot.fullPath, 'utf8')
+                        }
+                      } catch {}
+
+                      const prevLines = fileSnapshot.originalContent ? fileSnapshot.originalContent.split('\n').length : 0
+                      const newLines = newContent ? newContent.split('\n').length : 0
+                      const additions = Math.max(1, newLines >= prevLines ? newLines - prevLines : 1)
+                      const deletions = Math.max(0, prevLines - newLines)
+                      const fileName = basename(fileSnapshot.fullPath)
+
+                      if (targetWindow && !targetWindow.isDestroyed()) {
+                        targetWindow.webContents.send('agent:file-modified', {
+                          filePath: fileSnapshot.fullPath,
+                          fileName,
+                          additions,
+                          deletions,
+                          originalContent: fileSnapshot.originalContent,
+                          newContent
+                        })
+                      }
+                    }
+
+                    activeTools.delete(item.tool_use_id)
+                  }
+                }
+              }
+              continue
+            }
+
+            // 5. Result event (final success/error)
+            if (eventObj.type === 'result') {
+              if (eventObj.result && !hasReceivedContent) {
+                hasReceivedContent = true
+                targetWindow.webContents.send('agent:stream-token', {
+                  requestId,
+                  deltaContent: eventObj.result
+                })
+              }
+              continue
+            }
+          } catch {
+            // Non-JSON output fallback (e.g. raw text from CLI or ANSI banners)
+            const cleanText = trimmed.replace(/\u001b\[[0-9;]*[a-zA-Z]/g, '')
+            if (
+              cleanText &&
+              !cleanText.startsWith('[claude-code:') &&
+              !cleanText.includes('DeprecationWarning') &&
+              !cleanText.startsWith('Warning: no stdin')
+            ) {
+              const prefix = lastThoughtEndedWithNewline ? '' : '\n'
+              sendThought(prefix + cleanText + '\n')
+            }
+          }
+        }
       })
 
       proc.stderr?.on('data', (data) => {
@@ -361,18 +717,61 @@ export class ClaudeCliService {
           .replace(/\{"model":.*?"query_source":.*?\}/g, '')
           .replace(/.*isn't described by this version's model catalog.*?\n?/g, '')
           .replace(/.*DeprecationWarning.*?\n?/g, '')
+          .replace(/Warning: no stdin data received.*?\n?/g, '')
           .trim()
 
         if (filtered) {
-          targetWindow.webContents.send('agent:thought-token', {
-            requestId,
-            deltaThought: filtered + '\n'
-          })
+          const prefix = lastThoughtEndedWithNewline ? '' : '\n'
+          sendThought(prefix + filtered + '\n')
         }
       })
 
       proc.on('close', (code) => {
         this.activeProcesses.delete(requestId)
+
+        // Process any remainder in the line buffer
+        if (buffer.trim()) {
+          try {
+            const eventObj = JSON.parse(buffer.trim())
+            if (eventObj.type === 'result' && eventObj.result && !hasReceivedContent) {
+              hasReceivedContent = true
+              targetWindow.webContents.send('agent:stream-token', {
+                requestId,
+                deltaContent: eventObj.result
+              })
+            }
+          } catch {
+            const cleanText = buffer.trim().replace(/\u001b\[[0-9;]*[a-zA-Z]/g, '')
+            if (cleanText && !hasReceivedContent && !cleanText.startsWith('[claude-code:') && !cleanText.startsWith('Warning:')) {
+              targetWindow.webContents.send('agent:stream-token', {
+                requestId,
+                deltaContent: cleanText
+              })
+            }
+          }
+        }
+
+        // Finish any remaining running tools
+        for (const [toolId, toolInfo] of activeTools.entries()) {
+          const statusText = code === 0 ? 'done' : 'failed'
+          if (!toolInfo.printedStart) {
+            const disp = formatToolDisplayName(toolInfo.name)
+            const arg = formatToolArgSummary(toolInfo.args)
+            const prefix = lastThoughtEndedWithNewline ? '' : '\n'
+            sendThought(`${prefix}* ${disp}${arg ? ' ' + arg : ''} ${statusText}\n`)
+          } else {
+            sendThought(`${statusText}\n`)
+          }
+          targetWindow.webContents.send('agent:tool-finish', {
+            requestId,
+            toolCallId: toolId,
+            toolName: toolInfo.name,
+            status: code === 0 ? 'completed' : 'failed',
+            output: '',
+            durationMs: Math.max(1, Date.now() - toolInfo.startTime)
+          })
+        }
+        activeTools.clear()
 
         if (cleanSessionId && effectiveSessionId) {
           targetWindow.webContents.send('agent:session-linked', {
@@ -381,7 +780,7 @@ export class ClaudeCliService {
           })
         }
 
-        if (code === 0 || hasReceivedStdout) {
+        if (code === 0 || hasReceivedContent) {
           targetWindow.webContents.send('agent:stream-done', { requestId })
         } else {
           targetWindow.webContents.send('agent:stream-error', {
@@ -410,15 +809,31 @@ export class ClaudeCliService {
   public abortStream(requestId: string): boolean {
     const proc = this.activeProcesses.get(requestId)
     if (proc) {
+      const pid = proc.pid
       try {
-        proc.kill()
-      } catch (e) {
-        console.warn('Gagal mematikan proses Claude:', e)
+        proc.stdin?.destroy()
+        proc.stdout?.destroy()
+        proc.stderr?.destroy()
+      } catch {}
+
+      if (pid) {
+        if (process.platform === 'win32') {
+          try {
+            spawn('taskkill', ['/PID', pid.toString(), '/T', '/F'], { windowsHide: true })
+          } catch (e) {
+            console.warn('Gagal menjalankan taskkill pada proses Claude:', e)
+          }
+        }
+        try {
+          proc.kill('SIGKILL')
+        } catch (e) {
+          console.warn('Gagal mematikan proses Claude:', e)
+        }
       }
       this.activeProcesses.delete(requestId)
       return true
     }
-    return this.aiAgentService.abortStream(requestId)
+    return this.aiAgentService?.abortStream(requestId) ?? false
   }
 
   /**

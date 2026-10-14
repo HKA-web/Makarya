@@ -284,18 +284,25 @@ watch(
   () => workspaceStore.isGlobalSearchVisible,
   (val) => {
     if (val) {
+      let queryChanged = false
       if (workspaceStore.globalSearchInitialQuery) {
-        searchQuery.value = workspaceStore.globalSearchInitialQuery
+        if (searchQuery.value !== workspaceStore.globalSearchInitialQuery) {
+          searchQuery.value = workspaceStore.globalSearchInitialQuery
+          queryChanged = true
+        }
         workspaceStore.globalSearchInitialQuery = ''
       }
       currentPage.value = 1
       nextTick(() => {
         searchInputRef.value?.focus()
         searchInputRef.value?.select()
-        if (searchQuery.value.trim()) {
+        if (searchQuery.value.trim() && (queryChanged || searchResults.value.length === 0)) {
           performSearch(true)
         }
       })
+    } else {
+      isSearching.value = false
+      if (debounceTimer) clearTimeout(debounceTimer)
     }
   }
 )

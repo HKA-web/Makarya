@@ -1,7 +1,7 @@
 import { BrowserWindow } from 'electron'
-import { spawn, exec, type ChildProcess } from 'child_process'
+import { spawn, exec, execSync, type ChildProcess } from 'child_process'
 import { existsSync, readFileSync } from 'fs'
-import { join } from 'path'
+import { join, resolve, isAbsolute, basename, relative } from 'path'
 import { homedir } from 'os'
 
 export interface OpenCodeStreamRequest {
@@ -107,6 +107,87 @@ function categorizeDiscoveredModel(
     category: 'Custom Model',
     isFree: true
   }
+}
+
+function formatToolArgSummary(args: any): string {
+  if (!args || typeof args !== 'object') return ''
+  const pattern = args.pattern || args.glob || args.query || args.file_pattern
+  if (pattern) return `"${pattern}"`
+
+  const path =
+    args.filePath ||
+    args.path ||
+    args.filepath ||
+    args.file_path ||
+    args.file ||
+    args.targetFile ||
+    args.target_file ||
+    args.filename ||
+    args.fileName ||
+    args.dirPath ||
+    args.dir_path
+  if (path) {
+    let cleanPath = typeof path === 'string' ? path.replace(/\\/g, '/') : String(path)
+    if (cleanPath.length > 45) {
+      const parts = cleanPath.split('/')
+      if (parts.length > 2) {
+        cleanPath = parts.slice(-2).join('/')
+      }
+    }
+    return `"${cleanPath}"`
+  }
+
+  const cmd = args.command || args.cmd
+  if (cmd) {
+    const trimmedCmd = typeof cmd === 'string' ? cmd.trim() : String(cmd)
+    const shortCmd = trimmedCmd.length > 45 ? trimmedCmd.slice(0, 42) + '...' : trimmedCmd
+    return `"${shortCmd}"`
+  }
+
+  const keys = Object.keys(args)
+  if (keys.length > 0 && typeof args[keys[0]] === 'string') {
+    const val = args[keys[0]].trim()
+    return `"${val.length > 35 ? val.slice(0, 32) + '...' : val}"`
+  }
+
+  return ''
+}
+
+function formatToolResultSummary(toolName: string, output: string, isError: boolean): string {
+  if (isError) return 'failed'
+  if (!output || !output.trim()) return 'ok'
+
+  const trimmed = output.trim()
+  if (
+    trimmed.toLowerCase().includes('no matches') ||
+    trimmed.toLowerCase().includes('0 matches') ||
+    trimmed.toLowerCase().includes('no files found')
+  ) {
+    return '0 matches'
+  }
+  const lines = trimmed.split('\n').filter((l) => l.trim().length > 0)
+  const normName = toolName.toLowerCase()
+
+  if (normName.includes('glob') || normName.includes('grep')) {
+    const count = lines.length
+    return `${count} match${count === 1 ? '' : 'es'}`
+  }
+  if (normName.includes('read') || normName.includes('view')) {
+    const count = lines.length
+    return `${count} line${count === 1 ? '' : 's'}`
+  }
+  if (normName.includes('edit') || normName.includes('write') || normName.includes('patch')) {
+    return 'ok'
+  }
+  if (normName.includes('bash') || normName.includes('exec') || normName.includes('command')) {
+    if (trimmed.toLowerCase().includes('error')) return 'error'
+    return 'done'
+  }
+
+  if (lines.length === 1 && lines[0].length <= 25) {
+    return lines[0]
+  }
+  return `${lines.length} lines`
 }
 
 export class OpenCodeCliService {
@@ -318,7 +399,7 @@ export class OpenCodeCliService {
     }
 
     const cwd = validProjectRoot || process.cwd()
-    const cliArgs: string[] = ['run', '--auto']
+    const cliArgs: string[] = ['run', '--auto', '--format', 'json']
 
     if (validProjectRoot) {
       cliArgs.push('--dir', validProjectRoot)
@@ -356,40 +437,281 @@ export class OpenCodeCliService {
         cwd,
         shell: true,
         stdio: ['pipe', 'pipe', 'pipe'],
+        windowsHide: true,
         env: { ...process.env, FORCE_COLOR: '0' }
       })
 
       this.activeProcesses.set(requestId, proc)
+
+      let lastThoughtEndedWithNewline = true
+      const sendThought = (delta: string) => {
+        if (!delta) return
+        if (targetWindow && !targetWindow.isDestroyed()) {
+          targetWindow.webContents.send('agent:thought-token', {
+            requestId,
+            deltaThought: delta
+          })
+        }
+        lastThoughtEndedWithNewline = delta.endsWith('\n')
+      }
+
+      // Announce mode and model
+      const activeModeName = executionMode === 'chat' || executionMode === 'plan' ? 'plan' : 'build'
+      const activeModelName = model ? model.split('/').pop() || model : 'OpenCode'
+      sendThought(`> ${activeModeName} · ${activeModelName}\n\n`)
 
       // Send prompt via stdin to avoid Windows shell quoting/escaping limits and newline breakage
       proc.stdin?.write(lastUserMessage + '\n')
       proc.stdin?.end()
 
       let hasReceivedStdout = false
+      let buffer = ''
+      const toolOriginalContents = new Map<string, string>()
 
       proc.stdout?.on('data', (data) => {
         hasReceivedStdout = true
-        const text = data.toString()
-        const cleanText = text.replace(/\u001b\[[0-9;]*[a-zA-Z]/g, '')
-        targetWindow.webContents.send('agent:stream-token', {
-          requestId,
-          deltaContent: cleanText
-        })
+        buffer += data.toString()
+        const lines = buffer.split(/\r?\n/)
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          const rawTrimmed = line.trim()
+          if (!rawTrimmed) continue
+
+          // Clean ANSI codes first so JSON.parse never fails due to terminal coloring
+          const cleanLine = rawTrimmed.replace(/\u001b\[[0-9;]*[a-zA-Z]/g, '').trim()
+          if (!cleanLine) continue
+
+          try {
+            // Find JSON object boundary if surrounded by extraneous text
+            const startIdx = cleanLine.indexOf('{')
+            const endIdx = cleanLine.lastIndexOf('}')
+            if (startIdx === -1 || endIdx <= startIdx) {
+              throw new Error('Not JSON')
+            }
+            const jsonStr = cleanLine.substring(startIdx, endIdx + 1)
+            const eventObj = JSON.parse(jsonStr)
+
+            // 1. Session linking from step_start or root event
+            if (eventObj.sessionID && cleanSessionId && !this.sessionMap.has(cleanSessionId)) {
+              this.sessionMap.set(cleanSessionId, eventObj.sessionID)
+              if (targetWindow && !targetWindow.isDestroyed()) {
+                targetWindow.webContents.send('agent:session-linked', {
+                  clientSessionId: cleanSessionId,
+                  openCodeSessionId: eventObj.sessionID
+                })
+              }
+            }
+
+            // 2. Stream assistant text
+            if (eventObj.type === 'text' && eventObj.part) {
+              const text = eventObj.part.text || ''
+              if (text && targetWindow && !targetWindow.isDestroyed()) {
+                targetWindow.webContents.send('agent:stream-token', {
+                  requestId,
+                  deltaContent: text
+                })
+              }
+            }
+
+            // 3. Reasoning / Thought tokens
+            if ((eventObj.type === 'reasoning' || eventObj.type === 'thought') && eventObj.part) {
+              const thoughtText = eventObj.part.text || eventObj.part.reasoning || ''
+              if (thoughtText) {
+                sendThought(thoughtText)
+              }
+            }
+
+            // 4. Tool calls (file modifications, bash commands, etc.)
+            const isToolCall =
+              eventObj.type === 'tool_use' ||
+              eventObj.type === 'tool' ||
+              eventObj.type === 'tool_call' ||
+              Boolean(eventObj.part?.tool)
+
+            if (isToolCall && eventObj.part) {
+              const part = eventObj.part
+              const toolName = part.tool || eventObj.tool || part.name || 'tool'
+              const callID = part.callID || part.id || 'call_' + Date.now()
+              const state = part.state || {}
+              const input = state.input || {}
+              const isCompleted =
+                state.status === 'completed' ||
+                state.status === 'done' ||
+                state.status === 'success' ||
+                Boolean(state.output && !state.error)
+              const isError = state.status === 'failed' || Boolean(state.error)
+              const output = typeof state.output === 'string' ? state.output : JSON.stringify(state.output || '')
+              const durationMs =
+                state.time?.end && state.time?.start ? Math.max(1, state.time.end - state.time.start) : 1
+
+              const rawFilePath =
+                input.filePath ||
+                input.path ||
+                input.filepath ||
+                input.file_path ||
+                input.file ||
+                input.targetFile ||
+                input.target_file ||
+                input.filename ||
+                input.fileName ||
+                state.metadata?.filepath ||
+                state.metadata?.filePath ||
+                state.metadata?.file ||
+                state.metadata?.path ||
+                state.metadata?.filediff?.file
+
+              // Pre-cache original content if read/view tool
+              if (/read|view|glob/i.test(toolName) && rawFilePath && typeof rawFilePath === 'string') {
+                const fullPath = isAbsolute(rawFilePath) ? rawFilePath : resolve(cwd, rawFilePath)
+                if (existsSync(fullPath)) {
+                  try {
+                    toolOriginalContents.set(fullPath.toLowerCase(), readFileSync(fullPath, 'utf8'))
+                  } catch {}
+                }
+              }
+
+              // Announce tool execution into the live thinking stream (matching OpenCode & Claude native)
+              const disp = toolName.charAt(0).toUpperCase() + toolName.slice(1)
+              const arg = formatToolArgSummary(input)
+              const resultSummary = formatToolResultSummary(toolName, output, isError)
+              const prefix = lastThoughtEndedWithNewline ? '' : '\n'
+              sendThought(`${prefix}* ${disp}${arg ? ' ' + arg : ''} ${resultSummary}\n`)
+
+              // Emit tool-start
+              if (targetWindow && !targetWindow.isDestroyed()) {
+                targetWindow.webContents.send('agent:tool-start', {
+                  requestId,
+                  toolCallId: callID,
+                  toolName,
+                  args: input
+                })
+              }
+
+              if (isCompleted || isError) {
+                if (targetWindow && !targetWindow.isDestroyed()) {
+                  targetWindow.webContents.send('agent:tool-finish', {
+                    requestId,
+                    toolCallId: callID,
+                    toolName,
+                    status: isError ? 'failed' : 'success',
+                    output,
+                    durationMs
+                  })
+                }
+
+                // If file modification tool completed, trigger file modification event
+                const isFileEditTool = /write|edit|patch|create|modify|save|replace|multiedit|append/i.test(toolName)
+                if (isFileEditTool && !isError && rawFilePath && typeof rawFilePath === 'string') {
+                  const fullPath = isAbsolute(rawFilePath) ? rawFilePath : resolve(cwd, rawFilePath)
+                  const fileName = basename(fullPath)
+
+                  let newContent = ''
+                  try {
+                    if (existsSync(fullPath)) {
+                      newContent = readFileSync(fullPath, 'utf8')
+                    }
+                  } catch {}
+
+                  let originalContent = ''
+                  if (state.metadata?.exists === false) {
+                    originalContent = ''
+                  } else if (input.oldString !== undefined && input.newString !== undefined && newContent.includes(input.newString)) {
+                    originalContent = newContent.replace(input.newString, input.oldString)
+                  } else if (toolOriginalContents.has(fullPath.toLowerCase())) {
+                    originalContent = toolOriginalContents.get(fullPath.toLowerCase()) || ''
+                  } else {
+                    // Try to get previous content from Git if available
+                    try {
+                      const rel = fullPath.startsWith(cwd) ? fullPath.slice(cwd.length).replace(/^[/\\]+/, '') : fullPath
+                      const gitOrig = execSync(`git show HEAD:"${rel.replace(/\\/g, '/')}"`, { cwd, timeout: 2000, stdio: ['pipe', 'pipe', 'ignore'] }).toString('utf8')
+                      if (gitOrig) {
+                        originalContent = gitOrig
+                      }
+                    } catch {}
+                  }
+
+                  const prevLines = originalContent ? originalContent.split('\n').length : 0
+                  const newLines = newContent ? newContent.split('\n').length : 0
+                  const additions =
+                    state.metadata?.filediff?.additions ??
+                    state.metadata?.additions ??
+                    Math.max(1, newLines >= prevLines ? newLines - prevLines : 1)
+                  const deletions =
+                    state.metadata?.filediff?.deletions ??
+                    state.metadata?.deletions ??
+                    Math.max(0, prevLines - newLines)
+
+                  const modPayload = {
+                    filePath: fullPath,
+                    fileName,
+                    additions,
+                    deletions,
+                    originalContent,
+                    newContent
+                  }
+
+                  if (targetWindow && !targetWindow.isDestroyed()) {
+                    targetWindow.webContents.send('agent:file-modified', modPayload)
+                  }
+                  // Broadcast to all windows to ensure editor catches update
+                  BrowserWindow.getAllWindows().forEach((w) => {
+                    if (w !== targetWindow && !w.isDestroyed()) {
+                      w.webContents.send('agent:file-modified', modPayload)
+                    }
+                  })
+                }
+              }
+            }
+          } catch {
+            // Non-JSON fallback: forward text chunk if not internal warning
+            if (cleanLine && !cleanLine.startsWith('{') && !cleanLine.startsWith('Warning:')) {
+              if (targetWindow && !targetWindow.isDestroyed()) {
+                targetWindow.webContents.send('agent:stream-token', {
+                  requestId,
+                  deltaContent: cleanLine + '\n'
+                })
+              }
+            }
+          }
+        }
       })
 
       proc.stderr?.on('data', (data) => {
         const text = data.toString()
         const cleanText = text.replace(/\u001b\[[0-9;]*[a-zA-Z]/g, '')
-        if (cleanText.trim()) {
-          targetWindow.webContents.send('agent:thought-token', {
-            requestId,
-            deltaThought: cleanText
-          })
+        if (cleanText.trim() && !cleanText.includes('DeprecationWarning')) {
+          sendThought(cleanText)
         }
       })
 
       proc.on('close', (code) => {
         this.activeProcesses.delete(requestId)
+
+        // Process residual buffer
+        if (buffer.trim()) {
+          const cleanRemainder = buffer.trim().replace(/\u001b\[[0-9;]*[a-zA-Z]/g, '')
+          try {
+            const startIdx = cleanRemainder.indexOf('{')
+            const endIdx = cleanRemainder.lastIndexOf('}')
+            if (startIdx !== -1 && endIdx > startIdx) {
+              const eventObj = JSON.parse(cleanRemainder.substring(startIdx, endIdx + 1))
+              if (eventObj.type === 'text' && eventObj.part?.text && targetWindow && !targetWindow.isDestroyed()) {
+                targetWindow.webContents.send('agent:stream-token', {
+                  requestId,
+                  deltaContent: eventObj.part.text
+                })
+              }
+            }
+          } catch {
+            if (cleanRemainder && !cleanRemainder.startsWith('{') && targetWindow && !targetWindow.isDestroyed()) {
+              targetWindow.webContents.send('agent:stream-token', {
+                requestId,
+                deltaContent: cleanRemainder
+              })
+            }
+          }
+        }
 
         // If this was a new session without an established OpenCode session ID, detect the newly created session
         if (!effectiveSessionId && cleanSessionId) {
@@ -437,10 +759,26 @@ export class OpenCodeCliService {
   public abortStream(requestId: string): boolean {
     const proc = this.activeProcesses.get(requestId)
     if (proc) {
+      const pid = proc.pid
       try {
-        proc.kill()
-      } catch (e) {
-        console.warn('Gagal mematikan proses OpenCode:', e)
+        proc.stdin?.destroy()
+        proc.stdout?.destroy()
+        proc.stderr?.destroy()
+      } catch {}
+
+      if (pid) {
+        if (process.platform === 'win32') {
+          try {
+            spawn('taskkill', ['/PID', pid.toString(), '/T', '/F'], { windowsHide: true })
+          } catch (e) {
+            console.warn('Gagal taskkill OpenCode CLI:', e)
+          }
+        }
+        try {
+          proc.kill('SIGKILL')
+        } catch (e) {
+          console.warn('Gagal mematikan proses OpenCode:', e)
+        }
       }
       this.activeProcesses.delete(requestId)
       return true

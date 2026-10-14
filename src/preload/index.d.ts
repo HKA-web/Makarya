@@ -76,6 +76,8 @@ export interface ElectronAPI {
   copyEntry: (sourcePath: string, destinationDirectory: string, customNewName?: string) => Promise<{ success: boolean; destinationPath?: string; error?: string }>
   searchWorkspaceFiles: (rootPaths: string[]) => Promise<WorkspaceFileItem[]>
   saveImageToProject: (projectRoot: string, fileName: string, base64Data: string) => Promise<{ success: boolean; absolutePath?: string; relativePath?: string; fileName?: string; error?: string }>
+  watchWorkspace: (rootPaths: string[]) => Promise<{ success: boolean }>
+  onWorkspaceFsChange: (callback: (data: { changes: Array<{ eventType: string; fullPath: string; exists: boolean }> }) => void) => () => void
 
   // AI Copilot & Autonomous Agent API
   sendChatMessage: (payload: {
