@@ -22,7 +22,9 @@
     "paths": {
       "@renderer/*": ["src/renderer/src/*"],
       "@makarya/sdk": ["packages/makarya-sdk/src/index.ts"],
-      "@makarya/sdk/*": ["packages/makarya-sdk/src/*"]
+      "@makarya/sdk/*": ["packages/makarya-sdk/src/*"],
+      "@makarya/examples": ["packages/makarya-sdk/examples/index.ts"],
+      "@makarya/examples/*": ["packages/makarya-sdk/examples/*"]
     }
   },
   "include": [

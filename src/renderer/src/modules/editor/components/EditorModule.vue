@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useWorkspaceStore } from '@renderer/stores/workspaceStore'
 import { useSettingsStore } from '@renderer/stores/settingsStore'
 import { usePluginStore } from '@renderer/stores/pluginStore'
@@ -9,7 +9,6 @@ import SourceControlPanel from './SourceControlPanel.vue'
 import AgentPanel from './AgentPanel.vue'
 import OpenCodePanel from './OpenCodePanel.vue'
 import ClaudePanel from './ClaudePanel.vue'
-import AntigravityPanel from './AntigravityPanel.vue'
 import TerminalPanel from './TerminalPanel.vue'
 import CommandPalette from './CommandPalette.vue'
 import QuickOpenModal from './QuickOpenModal.vue'
@@ -22,7 +21,7 @@ import logoImg from '@renderer/assets/logo.png'
 import iconImg from '@renderer/assets/icon.jpg'
 import openCodeLogo from '@renderer/assets/opencode-logo.png'
 import claudeLogo from '@renderer/assets/claude-logo.svg'
-import antigravityLogo from '@renderer/assets/antigravity-logo.svg'
+import { AntigravityPanel, antigravityLogo } from '@makarya/examples'
 import { useGitStore } from '@renderer/stores/gitStore'
 
 const workspaceStore = useWorkspaceStore()
@@ -240,8 +239,26 @@ function handleCloseAllTabs(): void {
   }
 }
 
+const isAntigravityPluginEnabled = computed(() => {
+  const p = pluginStore.installedPlugins.get('makarya.builtin.agent-antigravity')
+  return p ? p.enabled && p.isLoaded : true
+})
+
+watch(isAntigravityPluginEnabled, (enabled) => {
+  if (!enabled && workspaceStore.isAntigravityPanelOpen) {
+    workspaceStore.isAntigravityPanelOpen = false
+  }
+})
+
+function onToggleAntigravityPlugin() {
+  if (isAntigravityPluginEnabled.value) {
+    workspaceStore.toggleAntigravityPanel()
+  }
+}
+
 onMounted(() => {
   window.addEventListener('click', handleWindowClick)
+  window.addEventListener('makarya:toggle-antigravity-panel', onToggleAntigravityPlugin)
   gitStore.refreshStatus()
   if (typeof workspaceStore.deduplicateTabs === 'function') {
     workspaceStore.deduplicateTabs()
@@ -259,6 +276,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('click', handleWindowClick)
+  window.removeEventListener('makarya:toggle-antigravity-panel', onToggleAntigravityPlugin)
 })
 </script>
 
@@ -589,6 +607,7 @@ onUnmounted(() => {
 
         <!-- Antigravity Autonomous Agent (AGY CLI) -->
         <button
+          v-if="isAntigravityPluginEnabled"
           @click="hideActionTooltip(); workspaceStore.toggleAntigravityPanel()"
           @mouseenter="showActionTooltip($event, 'Antigravity Autonomous Agent (AGY CLI)', undefined, 'right')"
           @mouseleave="hideActionTooltip"
@@ -755,7 +774,7 @@ onUnmounted(() => {
       <ClaudePanel v-show="workspaceStore.isClaudePanelOpen" />
 
       <!-- Antigravity Autonomous Agent Panel (AGY CLI) -->
-      <AntigravityPanel v-show="workspaceStore.isAntigravityPanelOpen" />
+      <AntigravityPanel v-if="isAntigravityPluginEnabled" v-show="workspaceStore.isAntigravityPanelOpen" />
 
       <!-- Source Control Right Panel (Git GUI - Always Open) -->
       <SourceControlPanel />

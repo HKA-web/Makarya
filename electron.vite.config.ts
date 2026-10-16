@@ -45,7 +45,8 @@ export default defineConfig({
     resolve: {
       alias: {
         '@renderer': resolve('src/renderer/src'),
-        '@makarya/sdk': resolve('packages/makarya-sdk/src')
+        '@makarya/sdk': resolve('packages/makarya-sdk/src'),
+        '@makarya/examples': resolve('packages/makarya-sdk/examples/index.ts')
       }
     },
     plugins: [ui(), vue()],

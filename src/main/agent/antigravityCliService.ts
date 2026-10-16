@@ -1,7 +1,7 @@
 import { BrowserWindow } from 'electron'
 import { spawn, exec, type ChildProcess } from 'child_process'
 import { existsSync, readFileSync, readdirSync, statSync, rmSync } from 'fs'
-import { join } from 'path'
+import { join, resolve, isAbsolute, basename } from 'path'
 import { homedir } from 'os'
 
 export interface AntigravityStreamRequest {
@@ -37,6 +37,118 @@ export interface AntigravitySessionItem {
   messageCount?: number
   isPinned?: boolean
   model?: string
+}
+
+function formatToolDisplayName(toolName: string): string {
+  const map: Record<string, string> = {
+    search_web: 'WebSearch',
+    WebSearch: 'WebSearch',
+    run_command: 'Bash',
+    bash: 'Bash',
+    BashTool: 'Bash',
+    Execute: 'Bash',
+    view_file: 'Read',
+    read_file: 'Read',
+    FileReadTool: 'Read',
+    View: 'Read',
+    write_to_file: 'Write',
+    file_write: 'Write',
+    FileWriteTool: 'Write',
+    Write: 'Write',
+    replace_file_content: 'Edit',
+    multi_replace_file_content: 'Edit',
+    file_edit: 'Edit',
+    edit_file: 'Edit',
+    FileEditTool: 'Edit',
+    Edit: 'Edit',
+    list_dir: 'LS',
+    LSTool: 'LS',
+    DirectoryList: 'LS',
+    grep_search: 'Grep',
+    grep: 'Grep',
+    GrepTool: 'Grep',
+    glob: 'Glob',
+    GlobTool: 'Glob',
+    open_browser_url: 'Browser',
+    read_url_content: 'WebFetch',
+    browser_subagent: 'BrowserAgent',
+    invoke_subagent: 'Subagent',
+    ask_question: 'Question',
+    generate_image: 'GenerateImage'
+  }
+  return map[toolName] || toolName.charAt(0).toUpperCase() + toolName.slice(1)
+}
+
+function formatToolArgSummary(args: any): string {
+  if (!args || typeof args !== 'object') return ''
+  const pattern = args.query || args.Query || args.pattern || args.glob || args.file_pattern
+  if (pattern) return `"${pattern}"`
+
+  const url = args.Url || args.url
+  if (url) return `"${url}"`
+
+  const path = args.TargetFile || args.AbsolutePath || args.file_path || args.path || args.filePath || args.dir_path || args.dirPath
+  if (path) {
+    let cleanPath = typeof path === 'string' ? path.replace(/\\/g, '/') : String(path)
+    if (cleanPath.length > 45) {
+      const parts = cleanPath.split('/')
+      if (parts.length > 2) {
+        cleanPath = parts.slice(-2).join('/')
+      }
+    }
+    return `"${cleanPath}"`
+  }
+
+  const cmd = args.CommandLine || args.command || args.cmd
+  if (cmd) {
+    const trimmedCmd = typeof cmd === 'string' ? cmd.trim() : String(cmd)
+    const shortCmd = trimmedCmd.length > 45 ? trimmedCmd.slice(0, 42) + '...' : trimmedCmd
+    return `"${shortCmd}"`
+  }
+
+  const keys = Object.keys(args)
+  if (keys.length > 0 && typeof args[keys[0]] === 'string') {
+    const val = args[keys[0]].trim()
+    return `"${val.length > 35 ? val.slice(0, 32) + '...' : val}"`
+  }
+
+  return ''
+}
+
+function formatToolResultSummary(toolName: string, output: string, isError: boolean): string {
+  if (isError) return 'failed'
+  if (!output || !output.trim()) return 'done'
+
+  const trimmed = output.trim()
+  if (trimmed.toLowerCase().includes('no matches') || trimmed.toLowerCase().includes('0 matches')) {
+    return '0 matches'
+  }
+  const lines = trimmed.split('\n').filter((l) => l.trim().length > 0)
+  const normName = toolName.toLowerCase()
+
+  if (normName.includes('glob') || normName.includes('grep')) {
+    const count = lines.length
+    return `${count} match${count === 1 ? '' : 'es'}`
+  }
+  if (normName.includes('read') || normName.includes('view')) {
+    const count = lines.length
+    return `${count} line${count === 1 ? '' : 's'}`
+  }
+  if (normName.includes('edit') || normName.includes('write')) {
+    return 'ok'
+  }
+  if (normName.includes('bash') || normName.includes('exec') || normName.includes('command') || normName.includes('run_command')) {
+    if (trimmed.toLowerCase().includes('error')) return 'error'
+    return 'done'
+  }
+  if (normName.includes('search') || normName.includes('fetch')) {
+    return 'done'
+  }
+
+  if (lines.length === 1 && lines[0].length <= 25) {
+    return lines[0]
+  }
+  return `${lines.length} lines`
 }
 
 export class AntigravityCliService {
@@ -155,19 +267,20 @@ export class AntigravityCliService {
     const cleanSessionId = sessionId ? sessionId.replace(/^agy_/, '') : undefined
     let effectiveConversationId: string | undefined = undefined
 
+    const brainDirs = this.getBrainDirs()
     const isUUID = cleanSessionId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleanSessionId)
 
-    if (isUUID) {
-      effectiveConversationId = cleanSessionId
-    } else if (cleanSessionId && this.sessionMap.has(cleanSessionId)) {
+    // Only pass --conversation if this conversation actually exists in the brain directories or has already been mapped
+    if (cleanSessionId && this.sessionMap.has(cleanSessionId)) {
       effectiveConversationId = this.sessionMap.get(cleanSessionId)
+    } else if (isUUID) {
+      const existsInBrain = brainDirs.some((bDir) => existsSync(join(bDir, cleanSessionId!)))
+      if (existsInBrain) {
+        effectiveConversationId = cleanSessionId
+      }
     }
 
-    const cliArgs: string[] = [
-      '--output-format',
-      'stream-json',
-      '--dangerously-skip-permissions'
-    ]
+    const cliArgs: string[] = []
 
     if (effectiveConversationId) {
       cliArgs.push('--conversation', effectiveConversationId)
@@ -183,6 +296,12 @@ export class AntigravityCliService {
       cliArgs.push('--mode', 'accept-edits')
     }
 
+    cliArgs.push(
+      '--output-format',
+      'stream-json',
+      '--dangerously-skip-permissions'
+    )
+
     try {
       const proc = spawn('agy', cliArgs, {
         cwd,
@@ -194,17 +313,31 @@ export class AntigravityCliService {
 
       this.activeProcesses.set(requestId, proc)
 
-      // Send user prompt via stdin safely
-      proc.stdin?.write(lastUserMessage + '\n')
+      // Send user prompt via stdin safely with UTF-8 encoding
+      proc.stdin?.setDefaultEncoding('utf-8')
+      proc.stdin?.write(lastUserMessage + '\n', 'utf-8')
       proc.stdin?.end()
 
       // Announce mode & model immediately in thought box
       const activeModeName = executionMode === 'chat' || executionMode === 'plan' ? 'plan' : 'agent'
       const activeModelName = model || 'Gemini 3.8 Flash'
-      targetWindow.webContents.send('agent:thought-token', {
-        requestId,
-        deltaThought: `> ${activeModeName} · ${activeModelName} · Antigravity CLI (agy)\n`
-      })
+
+      let lastThoughtEndedWithNewline = true
+      const sendThought = (delta: string) => {
+        if (!delta) return
+        if (targetWindow && !targetWindow.isDestroyed()) {
+          targetWindow.webContents.send('agent:thought-token', {
+            requestId,
+            deltaThought: delta
+          })
+        }
+        lastThoughtEndedWithNewline = delta.endsWith('\n')
+      }
+
+      sendThought(`> ${activeModeName} · ${activeModelName} · Antigravity CLI (agy)\n\n`)
+
+      const activeTools = new Map<string, { name: string; args: any; startTime: number; printedStart: boolean }>()
+      const toolOriginalContents = new Map<string, { fullPath: string; originalContent: string }>()
 
       let buffer = ''
       let hasReceivedContent = false
@@ -215,11 +348,20 @@ export class AntigravityCliService {
         buffer = lines.pop() || ''
 
         for (const line of lines) {
-          const trimmed = line.trim()
-          if (!trimmed) continue
+          const rawTrimmed = line.trim()
+          if (!rawTrimmed) continue
+
+          const cleanLine = rawTrimmed.replace(/\u001b\[[0-9;]*[a-zA-Z]/g, '').trim()
+          if (!cleanLine) continue
 
           try {
-            const eventObj = JSON.parse(trimmed)
+            const startIdx = cleanLine.indexOf('{')
+            const endIdx = cleanLine.lastIndexOf('}')
+            if (startIdx === -1 || endIdx <= startIdx) {
+              throw new Error('Not JSON')
+            }
+            const jsonStr = cleanLine.substring(startIdx, endIdx + 1)
+            const eventObj = JSON.parse(jsonStr)
 
             // Event: init
             if (eventObj.event === 'init' && eventObj.conversation_id) {
@@ -236,18 +378,254 @@ export class AntigravityCliService {
             // Event: step_update
             if (eventObj.event === 'step_update' && eventObj.step_update) {
               const step = eventObj.step_update
-              if (step.text_delta) {
-                hasReceivedContent = true
-                targetWindow.webContents.send('agent:stream-token', {
-                  requestId,
-                  deltaContent: step.text_delta
-                })
+
+              // 1. Tool execution in agy (step_type === 'tool')
+              if (step.step_type === 'tool') {
+                const toolName = step.tool_name || step.tool_info?.name || 'tool'
+                const callId = 'tool_' + (step.step_index !== undefined ? step.step_index : Date.now())
+                const args = step.tool_info?.parameters || step.tool_info?.args || step.tool_info?.input || {}
+
+                // Handle ask_question specifically
+                if (toolName === 'ask_question') {
+                  const qList = args.questions || (args.question ? [args] : [])
+                  const firstQ = qList[0] || {}
+                  targetWindow.webContents.send('agent:ask-question', {
+                    requestId,
+                    toolCallId: callId,
+                    question: firstQ.question || args.question || 'Pertanyaan klarifikasi Antigravity',
+                    options: firstQ.options || args.options || [],
+                    is_multi_select: firstQ.is_multi_select || args.is_multi_select || false
+                  })
+                }
+
+                if (step.state === 'ACTIVE') {
+                  // Snapshot file before modification
+                  const isFileEditTool = /write|replace|edit|modify|patch/i.test(toolName)
+                  const targetRawPath = args.TargetFile || args.AbsolutePath || args.file_path || args.path || args.filePath || args.targetFile
+                  if (isFileEditTool && targetRawPath && typeof targetRawPath === 'string') {
+                    const fullPath = isAbsolute(targetRawPath) ? targetRawPath : resolve(cwd, targetRawPath)
+                    let originalContent = ''
+                    try {
+                      if (existsSync(fullPath)) {
+                        originalContent = readFileSync(fullPath, 'utf8')
+                      }
+                    } catch {}
+                    toolOriginalContents.set(callId, { fullPath, originalContent })
+                  }
+
+                  const disp = formatToolDisplayName(toolName)
+                  const arg = formatToolArgSummary(args)
+                  const prefix = lastThoughtEndedWithNewline ? '' : '\n'
+                  sendThought(`${prefix}* ${disp}${arg ? ' ' + arg : ''} `)
+
+                  activeTools.set(callId, {
+                    name: toolName,
+                    args,
+                    startTime: Date.now(),
+                    printedStart: true
+                  })
+
+                  targetWindow.webContents.send('agent:tool-start', {
+                    requestId,
+                    toolCallId: callId,
+                    toolName,
+                    args
+                  })
+                } else if (step.state === 'DONE') {
+                  const output =
+                    typeof step.tool_info?.output === 'string'
+                      ? step.tool_info.output
+                      : JSON.stringify(step.tool_info?.output || '', null, 2)
+                  const isError = Boolean(step.tool_info?.error || step.error)
+                  const toolInfo = activeTools.get(callId)
+                  const durationMs = step.duration_seconds
+                    ? Math.round(step.duration_seconds * 1000)
+                    : (toolInfo ? Math.max(1, Date.now() - toolInfo.startTime) : 1)
+
+                  const resultSummary = formatToolResultSummary(toolName, output, isError)
+
+                  if (toolInfo && !toolInfo.printedStart) {
+                    const disp = formatToolDisplayName(toolName)
+                    const arg = formatToolArgSummary(toolInfo.args)
+                    const prefix = lastThoughtEndedWithNewline ? '' : '\n'
+                    sendThought(`${prefix}* ${disp}${arg ? ' ' + arg : ''} ${resultSummary}\n`)
+                  } else {
+                    sendThought(`${resultSummary}\n`)
+                  }
+
+                  targetWindow.webContents.send('agent:tool-finish', {
+                    requestId,
+                    toolCallId: callId,
+                    toolName,
+                    status: isError ? 'failed' : 'completed',
+                    output,
+                    durationMs
+                  })
+
+                  // Emit file-modified if file write/edit tool completed successfully
+                  const snapshot = toolOriginalContents.get(callId)
+                  if (snapshot && !isError) {
+                    toolOriginalContents.delete(callId)
+                    let newContent = ''
+                    try {
+                      if (existsSync(snapshot.fullPath)) {
+                        newContent = readFileSync(snapshot.fullPath, 'utf8')
+                      }
+                    } catch {}
+
+                    const prevLines = snapshot.originalContent ? snapshot.originalContent.split('\n').length : 0
+                    const newLines = newContent ? newContent.split('\n').length : 0
+                    const additions = Math.max(1, newLines >= prevLines ? newLines - prevLines : 1)
+                    const deletions = Math.max(0, prevLines - newLines)
+                    const fileName = basename(snapshot.fullPath)
+
+                    const modPayload = {
+                      filePath: snapshot.fullPath,
+                      fileName,
+                      additions,
+                      deletions,
+                      originalContent: snapshot.originalContent,
+                      newContent
+                    }
+
+                    if (targetWindow && !targetWindow.isDestroyed()) {
+                      targetWindow.webContents.send('agent:file-modified', modPayload)
+                    }
+                    for (const w of BrowserWindow.getAllWindows()) {
+                      if (!w.isDestroyed() && w !== targetWindow) {
+                        w.webContents.send('agent:file-modified', modPayload)
+                      }
+                    }
+                  }
+                }
               }
-              if (step.thought_delta || step.reasoning_delta) {
-                targetWindow.webContents.send('agent:thought-token', {
-                  requestId,
-                  deltaThought: step.thought_delta || step.reasoning_delta
-                })
+
+              // 2. Assistant text and reasoning (step_type === 'agent_response')
+              if (step.step_type === 'agent_response') {
+                if (step.text_delta) {
+                  hasReceivedContent = true
+                  targetWindow.webContents.send('agent:stream-token', {
+                    requestId,
+                    deltaContent: step.text_delta
+                  })
+                }
+
+                if (step.thought_delta || step.reasoning_delta) {
+                  sendThought(step.thought_delta || step.reasoning_delta)
+                }
+
+                // When step is DONE and has thinking tokens or duration
+                if (step.state === 'DONE' && step.duration_seconds && (step.usage?.thinking_tokens || step.duration_seconds >= 1)) {
+                  const prefix = lastThoughtEndedWithNewline ? '' : '\n'
+                  const tokenStr = step.usage?.thinking_tokens ? ` (${step.usage.thinking_tokens} tokens)` : ''
+                  sendThought(`${prefix}* Menalar ${step.duration_seconds.toFixed(1)}s${tokenStr}\n`)
+                }
+              }
+
+              // Fallback tool calls inside step_update (if formatted as tool_calls array)
+              const stepCalls = step.tool_calls || (step.tool_call ? [step.tool_call] : null)
+              if (Array.isArray(stepCalls)) {
+                for (const tc of stepCalls) {
+                  if (!tc) continue
+                  const toolName = tc.name || tc.tool || 'tool'
+                  const callId = tc.id || tc.call_id || 'call_' + Date.now()
+                  const args = tc.args || tc.input || {}
+                  const isFileEditTool = /write|replace|edit|modify|patch/i.test(toolName)
+                  const targetRawPath = args.TargetFile || args.AbsolutePath || args.file_path || args.path || args.filePath || args.targetFile
+                  if (isFileEditTool && targetRawPath && typeof targetRawPath === 'string') {
+                    const fullPath = isAbsolute(targetRawPath) ? targetRawPath : resolve(cwd, targetRawPath)
+                    if (existsSync(fullPath)) {
+                      try {
+                        toolOriginalContents.set(callId, { fullPath, originalContent: readFileSync(fullPath, 'utf8') })
+                      } catch {}
+                    }
+                  }
+                  targetWindow.webContents.send('agent:tool-start', {
+                    requestId,
+                    toolCallId: callId,
+                    toolName,
+                    args
+                  })
+                  const prefix = lastThoughtEndedWithNewline ? '' : '\n'
+                  sendThought(`${prefix}* ${formatToolDisplayName(toolName)} ${formatToolArgSummary(args)}\n`)
+                }
+              }
+            }
+
+            // Direct tool_use fallback
+            if (eventObj.event === 'tool_use' || eventObj.type === 'tool_use' || eventObj.event === 'tool_call') {
+              const toolName = eventObj.tool || eventObj.name || eventObj.tool_name || 'tool'
+              const callId = eventObj.id || eventObj.tool_call_id || eventObj.call_id || 'call_' + Date.now()
+              const args = eventObj.args || eventObj.input || {}
+              const isFileEditTool = /write|replace|edit|modify|patch/i.test(toolName)
+              const targetRawPath = args.TargetFile || args.AbsolutePath || args.file_path || args.path || args.filePath || args.targetFile
+              if (isFileEditTool && targetRawPath && typeof targetRawPath === 'string') {
+                const fullPath = isAbsolute(targetRawPath) ? targetRawPath : resolve(cwd, targetRawPath)
+                if (existsSync(fullPath)) {
+                  try {
+                    toolOriginalContents.set(callId, { fullPath, originalContent: readFileSync(fullPath, 'utf8') })
+                  } catch {}
+                }
+              }
+              targetWindow.webContents.send('agent:tool-start', {
+                requestId,
+                toolCallId: callId,
+                toolName,
+                args
+              })
+              const prefix = lastThoughtEndedWithNewline ? '' : '\n'
+              sendThought(`${prefix}* ${formatToolDisplayName(toolName)} ${formatToolArgSummary(args)}\n`)
+            }
+
+            // Direct tool_result fallback
+            if (eventObj.event === 'tool_result' || eventObj.event === 'tool_finish' || eventObj.type === 'tool_result') {
+              const callId = eventObj.tool_call_id || eventObj.call_id || eventObj.id || ''
+              const toolName = eventObj.tool_name || eventObj.tool || 'tool'
+              const output = typeof eventObj.output === 'string' ? eventObj.output : JSON.stringify(eventObj.output || eventObj.result || '')
+              const isError = Boolean(eventObj.error || eventObj.is_error)
+
+              targetWindow.webContents.send('agent:tool-finish', {
+                requestId,
+                toolCallId: callId,
+                toolName,
+                status: isError ? 'failed' : 'completed',
+                output,
+                durationMs: 1
+              })
+
+              const snapshot = toolOriginalContents.get(callId)
+              if (snapshot && !isError) {
+                toolOriginalContents.delete(callId)
+                let newContent = ''
+                try {
+                  if (existsSync(snapshot.fullPath)) {
+                    newContent = readFileSync(snapshot.fullPath, 'utf8')
+                  }
+                } catch {}
+
+                const prevLines = snapshot.originalContent ? snapshot.originalContent.split('\n').length : 0
+                const newLines = newContent ? newContent.split('\n').length : 0
+                const additions = Math.max(1, newLines >= prevLines ? newLines - prevLines : 1)
+                const deletions = Math.max(0, prevLines - newLines)
+                const fileName = basename(snapshot.fullPath)
+
+                const modPayload = {
+                  filePath: snapshot.fullPath,
+                  fileName,
+                  additions,
+                  deletions,
+                  originalContent: snapshot.originalContent,
+                  newContent
+                }
+
+                if (targetWindow && !targetWindow.isDestroyed()) {
+                  targetWindow.webContents.send('agent:file-modified', modPayload)
+                }
+                for (const w of BrowserWindow.getAllWindows()) {
+                  if (!w.isDestroyed() && w !== targetWindow) {
+                    w.webContents.send('agent:file-modified', modPayload)
+                  }
+                }
               }
             }
 
@@ -266,7 +644,7 @@ export class AntigravityCliService {
             hasReceivedContent = true
             targetWindow.webContents.send('agent:stream-token', {
               requestId,
-              deltaContent: trimmed + '\n'
+              deltaContent: cleanLine + '\n'
             })
           }
         }
@@ -274,12 +652,23 @@ export class AntigravityCliService {
 
       proc.stderr?.on('data', (data) => {
         const text = data.toString().replace(/\u001b\[[0-9;]*[a-zA-Z]/g, '')
-        if (text.trim()) {
-          targetWindow.webContents.send('agent:thought-token', {
-            requestId,
-            deltaThought: text
-          })
+        const trimmed = text.trim()
+        if (!trimmed) return
+
+        // Filter out benign conversation warnings or plugin notices
+        if (
+          trimmed.includes('warning: conversation') ||
+          trimmed.includes('ExperimentalWarning') ||
+          trimmed.includes('Failed to load plugin')
+        ) {
+          console.warn('[Antigravity CLI stderr warning ignored]:', trimmed)
+          return
         }
+
+        targetWindow.webContents.send('agent:thought-token', {
+          requestId,
+          deltaThought: text
+        })
       })
 
       proc.on('close', (code) => {

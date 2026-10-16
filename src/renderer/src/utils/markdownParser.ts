@@ -68,13 +68,43 @@ export function formatInlineMarkdown(text?: any): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
 
+  // 0. Markdown Links: [label](url) - properly consume both label and URL
+  formatted = formatted.replace(
+    /\[([^\]]+)\]\(([^)]+)\)/g,
+    (_, label, rawUrl) => {
+      const cleanLabel = (label || '').trim()
+      let cleanUrl = (rawUrl || '').trim()
+
+      // If it's a file:/// URL or file link
+      if (cleanUrl.startsWith('file:///') || cleanUrl.startsWith('file://')) {
+        let filePath = cleanUrl.replace(/^file:\/\/\/?/, '')
+        try {
+          filePath = decodeURIComponent(filePath)
+        } catch {}
+        return `<span class="inline-flex items-center gap-1.5 px-2 py-0.5 mx-1 rounded-md bg-[#132c5e] hover:bg-[#1a3d82] border border-blue-400/30 text-blue-100 hover:text-white text-[10.5px] font-mono select-none cursor-pointer transition-colors align-middle shadow-2xs group" data-file-ref="${filePath}" title="Buka berkas ${filePath}"><svg class="size-3 text-sky-400 group-hover:text-emerald-400 inline-block flex-shrink-0 transition-colors" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></svg><span class="leading-tight">${cleanLabel || filePath}</span></span>`
+      }
+
+      // External web links http:// or https://
+      if (/^https?:\/\//i.test(cleanUrl)) {
+        return `<a href="${cleanUrl}" target="_blank" rel="noopener noreferrer" class="text-sky-400 hover:text-sky-300 underline underline-offset-2 transition-colors">${cleanLabel || cleanUrl}</a>`
+      }
+
+      // Relative or local file path
+      if (/\.[a-zA-Z0-9]+(?::L?\d+)?$/i.test(cleanUrl)) {
+        return `<span class="inline-flex items-center gap-1.5 px-2 py-0.5 mx-1 rounded-md bg-[#132c5e] hover:bg-[#1a3d82] border border-blue-400/30 text-blue-100 hover:text-white text-[10.5px] font-mono select-none cursor-pointer transition-colors align-middle shadow-2xs group" data-file-ref="${cleanUrl}" title="Buka berkas ${cleanUrl}"><svg class="size-3 text-sky-400 group-hover:text-emerald-400 inline-block flex-shrink-0 transition-colors" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></svg><span class="leading-tight">${cleanLabel || cleanUrl}</span></span>`
+      }
+
+      return `<a href="${cleanUrl}" target="_blank" rel="noopener noreferrer" class="text-sky-400 hover:text-sky-300 underline underline-offset-2 transition-colors">${cleanLabel || cleanUrl}</a>`
+    }
+  )
+
   // 1. File pill tag: [📄 filename.ext:L1-L20] or [📄 filename.ext] or 📄 filename.ext or [filename.ext]
   formatted = formatted.replace(
     /(?:\[📄\s*([^\]]+)\]|📄\s*([a-zA-Z0-9_\-\.\/\\]+\.[a-zA-Z0-9]+(?:\s+L?\d+(?:-L?\d+)?)?)|\[([a-zA-Z0-9_\-\.\/\\]+\.(?:vue|ts|js|jsx|tsx|json|php|css|scss|html|md|py|go|rs|java|c|cpp|h|sql|yaml|yml|env|blade\.php)(?::L?\d+(?:-L?\d+)?)?)\])/g,
     (_, p1, p2, p3) => {
       const fileRef = (p1 || p2 || p3 || '').trim()
       if (!fileRef) return ''
-      return `<span class="inline-flex items-center gap-1.5 px-2 py-0.5 mx-1 rounded-md bg-[#161b24] hover:bg-[#202735] border border-white/15 text-slate-200 hover:text-white text-[10.5px] font-mono select-none cursor-pointer transition-colors align-middle shadow-2xs group" data-file-ref="${fileRef}" title="Buka berkas ${fileRef}"><svg class="size-3 text-slate-400 group-hover:text-emerald-400 inline-block flex-shrink-0 transition-colors" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></svg><span class="leading-tight">${fileRef}</span></span>`
+      return `<span class="inline-flex items-center gap-1.5 px-2 py-0.5 mx-1 rounded-md bg-[#132c5e] hover:bg-[#1a3d82] border border-blue-400/30 text-blue-100 hover:text-white text-[10.5px] font-mono select-none cursor-pointer transition-colors align-middle shadow-2xs group" data-file-ref="${fileRef}" title="Buka berkas ${fileRef}"><svg class="size-3 text-sky-400 group-hover:text-emerald-400 inline-block flex-shrink-0 transition-colors" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></svg><span class="leading-tight">${fileRef}</span></span>`
     }
   )
 
@@ -83,7 +113,7 @@ export function formatInlineMarkdown(text?: any): string {
     /(?:^|\s)@([a-zA-Z0-9_\-\.\/\\]+\.[a-zA-Z0-9]+(?::L?\d+(?:-L?\d+)?)?)/g,
     (match, fileRef) => {
       const prefix = match.startsWith(' ') ? ' ' : ''
-      return `${prefix}<span class="inline-flex items-center gap-1.5 px-2 py-0.5 mx-1 rounded-md bg-[#161b24] hover:bg-[#202735] border border-white/15 text-slate-200 hover:text-white text-[10.5px] font-mono select-none cursor-pointer transition-colors align-middle shadow-2xs group" data-file-ref="${fileRef}" title="Buka berkas ${fileRef}"><svg class="size-3 text-slate-400 group-hover:text-emerald-400 inline-block flex-shrink-0 transition-colors" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></svg><span class="leading-tight">${fileRef}</span></span>`
+      return `${prefix}<span class="inline-flex items-center gap-1.5 px-2 py-0.5 mx-1 rounded-md bg-[#132c5e] hover:bg-[#1a3d82] border border-blue-400/30 text-blue-100 hover:text-white text-[10.5px] font-mono select-none cursor-pointer transition-colors align-middle shadow-2xs group" data-file-ref="${fileRef}" title="Buka berkas ${fileRef}"><svg class="size-3 text-sky-400 group-hover:text-emerald-400 inline-block flex-shrink-0 transition-colors" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></svg><span class="leading-tight">${fileRef}</span></span>`
     }
   )
 

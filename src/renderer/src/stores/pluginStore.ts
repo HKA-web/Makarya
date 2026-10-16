@@ -16,8 +16,9 @@ import { createPluginContext } from '../sdk/runtime'
 import {
   StudioPalettePlugin,
   TagIntelligencePlugin,
-  DatabaseAiToolPlugin
-} from '../../../../packages/makarya-sdk/examples/index'
+  DatabaseAiToolPlugin,
+  AntigravityAgentPlugin
+} from '@makarya/examples'
 import { useToast } from 'primevue/usetoast'
 import { useConfirm } from 'primevue/useconfirm'
 
@@ -375,6 +376,7 @@ export const usePluginStore = defineStore('plugins', () => {
     registerPlugin(TagIntelligencePlugin)
     registerPlugin(DatabaseAiToolPlugin)
     registerPlugin(StudioPalettePlugin)
+    registerPlugin(AntigravityAgentPlugin)
   }
 
   return {

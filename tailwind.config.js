@@ -5,7 +5,8 @@ module.exports = {
   darkMode: ['selector', '.dark-mode'],
   content: [
     './src/renderer/index.html',
-    './src/renderer/src/**/*.{vue,js,ts,jsx,tsx}'
+    './src/renderer/src/**/*.{vue,js,ts,jsx,tsx}',
+    './packages/**/*.{vue,js,ts,jsx,tsx}'
   ],
   theme: {
     extend: {
